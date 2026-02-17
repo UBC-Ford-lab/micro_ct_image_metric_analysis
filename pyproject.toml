@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "micro-ct-image-metric-analysis"
+version = "0.1.0"
+description = "CT image quality metrics: MTF, NPS, NEQ, TTF, and detectability index"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Falk Wiegmann"},
+]
+keywords = ["CT", "image quality", "MTF", "NPS", "NEQ", "TTF", "detectability", "micro-CT", "medical imaging"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+dependencies = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "photutils",
+]
+
+[project.urls]
+Repository = "https://github.com/UBC-Ford-lab/micro_ct_image_metric_analysis"
+
+[tool.setuptools.packages.find]
+include = ["metric_calculators*"]
+
+[tool.setuptools]
+py-modules = []
