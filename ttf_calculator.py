@@ -221,25 +221,51 @@ def get_TTF(image_data, centre_pixels, radius, materials=None, find_absolute_TTF
             plt.savefig(target_directory + '/TTF_results_relative.png', dpi=300)
         else:
             plt.savefig(target_directory + '/TTF_results_absolute.png', dpi=300)
+        plt.close('all')
 
     return TTF_freq, TTF_array, CNR_array
 
+def parse_args():
+    import argparse
+    from .helper_scripts.io_utils import parse_centre_pixels, parse_slices
+    parser = argparse.ArgumentParser(description='Calculate the Task Transfer Function (TTF) from CT image data.')
+    parser.add_argument('--input', required=True, help='Path to image file (.npy, .npz, or .vff)')
+    parser.add_argument('--centre_pixels', required=True, type=parse_centre_pixels,
+                        help='Centre pixels as semicolon-separated y,x pairs (e.g. "1335,2141;765,1914")')
+    parser.add_argument('--radius', required=True, type=int, help='Radius of circular edges in pixels')
+    parser.add_argument('--materials', type=str, default=None,
+                        help='Comma-separated material names (e.g. "Teflon,HD POLY,Fat,Tissue")')
+    parser.add_argument('--slices', type=str, default=None, help='Slice selection (e.g. "8:45")')
+    parser.add_argument('--pixel_size', type=float, default=0.05, help='Pixel size in mm (default: 0.05)')
+    parser.add_argument('--relative', action='store_true', help='Calculate relative TTF instead of absolute')
+    parser.add_argument('--output_dir', type=str, default='./results', help='Output directory (default: ./results)')
+    parser.add_argument('--no_plot', action='store_true', help='Disable plot generation')
+    parser.add_argument('--show', action='store_true', help='Display plots interactively')
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    from .helper_scripts.io_utils import load_image_data, ensure_output_dir, parse_slices
+
+    image_data = load_image_data(args.input)
+    if args.slices is not None:
+        image_data = image_data[parse_slices(args.slices)]
+
+    materials = None
+    if args.materials is not None:
+        materials = [m.strip() for m in args.materials.split(',')]
+
+    output_dir = ensure_output_dir(args.output_dir)
+
+    _ = get_TTF(image_data, args.centre_pixels, args.radius, materials=materials,
+                find_absolute_TTF=not args.relative, pixel_size=args.pixel_size,
+                target_directory=output_dir, plot_results=not args.no_plot)
+
+    if args.show:
+        import matplotlib.pyplot as plt
+        plt.show()
+
+
 if __name__ == '__main__':
-    # Load the image data
-    from reconstruction.ct_core import vff_io as vff
-    image_data = vff.read_vff("/Volumes/CHTP/Ford/Falk/phantom/Halfscan-16ms/Halfscan-16ms-75um-materials.vff", verbose=False)[1]
-
-    # select only the slices which contain the circular edge test pattern
-    # then define the centre of the circular edge in pixel coordinates (y, x)
-    # then define the type of materials in the circular edge test pattern
-    # then define the radius of the circular edges in pixels
-
-    image_data_TTF = image_data[8:45, :, :]
-    centre_pixels_TTF = np.array([[1430, 2186], [857, 1963], [619, 1400], [845, 831], [1409, 596], [1976, 819], [2216, 1376], [1419, 1389]])
-    centre_pixels_TTF = np.round(centre_pixels_TTF/3).astype(int)
-    radius_TTF = 40
-    materials_TTF = ['Teflon', 'HD POLY', 'Fat', 'Tissue', 'Lucite', 'Water', 'SB3', 'Air']
-
-
-    _ = get_TTF(image_data_TTF, centre_pixels_TTF, radius_TTF, materials=materials_TTF, find_absolute_TTF=True, pixel_size=0.075,
-            target_directory=os.getcwd(), plot_results=True)
+    main()

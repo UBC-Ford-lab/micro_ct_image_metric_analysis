@@ -150,27 +150,46 @@ def get_NPS(image_data, ROI_bounds, pixel_size, target_directory=os.getcwd(), pl
         plt.tight_layout()
         plt.savefig(target_directory + '/NPS_results.png', dpi=300)
         plt.savefig(target_directory + '/NPS_results.pdf', dpi=300)
+        plt.close('all')
 
     return (radialprofile.radius*np.max(NPS_freqs_transverse)/np.max(radialprofile.radius)), np.mean(NPS_radial_avg, axis=0)
 
+def parse_args():
+    import argparse
+    from .helper_scripts.io_utils import parse_roi_bounds, parse_slices
+    parser = argparse.ArgumentParser(description='Calculate the Noise Power Spectrum (NPS) from CT image data.')
+    parser.add_argument('--input', required=True, help='Path to image file (.npy, .npz, or .vff)')
+    parser.add_argument('--roi_bounds', required=True, type=parse_roi_bounds,
+                        help='ROI bounds as semicolon-separated y1,y2,x1,x2 groups '
+                             '(e.g. "178,294,510,626;258,374,750,866")')
+    parser.add_argument('--slices', type=str, default=None,
+                        help='Slice selection (e.g. "0:30,140:182")')
+    parser.add_argument('--pixel_size', type=float, required=True, help='Pixel size in mm')
+    parser.add_argument('--filter_low_freq', action='store_true', help='Filter low frequency components')
+    parser.add_argument('--output_dir', type=str, default='./results', help='Output directory (default: ./results)')
+    parser.add_argument('--no_plot', action='store_true', help='Disable plot generation')
+    parser.add_argument('--show', action='store_true', help='Display plots interactively')
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    from .helper_scripts.io_utils import load_image_data, ensure_output_dir, parse_slices
+
+    image_data = load_image_data(args.input)
+    if args.slices is not None:
+        image_data = image_data[parse_slices(args.slices)]
+
+    output_dir = ensure_output_dir(args.output_dir)
+
+    _ = get_NPS(image_data, args.roi_bounds, pixel_size=args.pixel_size,
+                target_directory=output_dir, plot_results=not args.no_plot,
+                filter_low_freq=args.filter_low_freq)
+
+    if args.show:
+        import matplotlib.pyplot as plt
+        plt.show()
+
+
 if __name__ == '__main__':
-    # Load the image data
-    from reconstruction.ct_core import vff_io as vff
-    image_data = vff.read_vff("data/results/repaint_reconstruction.vff", verbose=False)[1]
-
-    #select only the slices which contain the homogeneous part of the phantom
-    # Define the ROIs over which to compute the NPS (y1, y2, x1, x2) in pixel coordinates
-    image_data_NPS = image_data[np.concatenate((np.arange(204, 208), np.arange(216, 226))), :, :]
-    ROI_bounds_NPS = np.array([[178, 294, 510, 626], [258, 374, 750, 866], [310, 426, 328, 444], [432, 548, 830, 946], [488, 604, 248, 364], [580, 696, 730, 846], [624, 740, 414, 530], [724, 840, 598, 714]])
-
-    # Calculate the NPS
-    _ = get_NPS(image_data_NPS, ROI_bounds_NPS, pixel_size=0.085, target_directory=os.getcwd(), plot_results=True)
-
-
-
-
-''' For data/results/ground_truth_reconstruction.vff
-    image_data_NPS = image_data[np.concatenate((np.arange(204, 208), np.arange(216, 226))), :, :]
-    ROI_bounds_NPS = np.array([[178, 294, 510, 626], [258, 374, 750, 866], [310, 426, 328, 444], [432, 548, 830, 946], [488, 604, 248, 364], [580, 696, 730, 846], [624, 740, 414, 530], [724, 840, 598, 714]])
-
-'''
+    main()

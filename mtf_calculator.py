@@ -233,33 +233,53 @@ def get_MTF(image_data, crop_indices, find_absolute_MTF=True, pixel_size=0.05,
         else:
             plt.savefig(target_directory + '/MTF_results_absolute.png', dpi=300)
             plt.savefig(target_directory + '/MTF_results_absolute.pdf', dpi=300)
+        plt.close('all')
 
     if return_ERF:
         return MTF_freq, MTF, ERF
     else:
         return MTF_freq, MTF
 
+def parse_args():
+    import argparse
+    from .helper_scripts.io_utils import parse_int_list, parse_slices
+    parser = argparse.ArgumentParser(description='Calculate the Modulation Transfer Function (MTF) from CT image data.')
+    parser.add_argument('--input', required=True, help='Path to image file (.npy, .npz, or .vff)')
+    parser.add_argument('--crop_indices', required=True, type=parse_int_list,
+                        help='Crop region as y1,y2,x1,x2 (e.g. "270,664,522,640")')
+    parser.add_argument('--slices', type=str, default=None,
+                        help='Slice selection (e.g. "10:160" or "0:30,140:182")')
+    parser.add_argument('--pixel_size', type=float, default=0.05, help='Pixel size in mm (default: 0.05)')
+    parser.add_argument('--edge_angle', type=float, default=5.0, help='Edge angle in degrees (default: 5.0)')
+    parser.add_argument('--high_to_low', action='store_true', default=True,
+                        help='Edge goes from high to low intensity (default: True)')
+    parser.add_argument('--low_to_high', action='store_true', help='Edge goes from low to high intensity')
+    parser.add_argument('--relative', action='store_true', help='Calculate relative MTF instead of absolute')
+    parser.add_argument('--output_dir', type=str, default='./results', help='Output directory (default: ./results)')
+    parser.add_argument('--no_plot', action='store_true', help='Disable plot generation')
+    parser.add_argument('--show', action='store_true', help='Display plots interactively')
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    from .helper_scripts.io_utils import load_image_data, ensure_output_dir, parse_slices
+
+    image_data = load_image_data(args.input)
+    if args.slices is not None:
+        image_data = image_data[parse_slices(args.slices)]
+
+    output_dir = ensure_output_dir(args.output_dir)
+    high_to_low = not args.low_to_high
+
+    _ = get_MTF(image_data, args.crop_indices, find_absolute_MTF=not args.relative,
+                pixel_size=args.pixel_size, target_directory=output_dir,
+                plot_results=not args.no_plot, edge_angle=args.edge_angle, high_to_low=high_to_low)
+
+    if args.show:
+        import matplotlib.pyplot as plt
+        plt.show()
+
+
 if __name__ == '__main__':
-    # Load the image data
-    from reconstruction.ct_core import vff_io as vff
-    image_data = vff.read_vff("data/results/repaint_reconstruction.vff", verbose=False)[1]
-
-    # select only the slices which contain the slanted edge test pattern
-    # then define the crop indices (y1, y2, x1, x2)
-    #image_data_MTF = image_data[24:67, :, :]
-
-    #crop_indices_MTF = np.array([788, 1988, 1156, 1572])
-    #crop_indices_MTF = np.round(crop_indices_MTF/3).astype(int)
-    image_data_MTF = image_data[228:229, :, :]
-    crop_indices_MTF = [270, 664, 522, 640]
-
-    _ = get_MTF(image_data_MTF, crop_indices_MTF, find_absolute_MTF=True, pixel_size=0.085,
-                target_directory=os.getcwd(), plot_results=True, edge_angle=5.4, high_to_low=True)
-
-
-
-'''
-For data/results/ground_truth_reconstruction.vff
-image_data_MTF = image_data[228:229, :, :]
-crop_indices_MTF = [270, 664, 522, 640]
-'''
+    main()

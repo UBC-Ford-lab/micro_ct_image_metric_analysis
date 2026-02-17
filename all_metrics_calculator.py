@@ -8,53 +8,111 @@ from . import neq_calculator as NEQ_calculator
 from . import mtf_calculator as MTF_calculator
 from . import ttf_calculator as TTF_calculator
 from . import d_prime_calculator
-from reconstruction.ct_core import vff_io as vff
 
-if __name__ == '__main__':
-    # Create the target directory
-    # TODO: Update this path to your desired output directory
-    target_directory = 'data/results/metric_results'
-    if not os.path.exists(target_directory):
-        os.makedirs(target_directory)
+
+def run_all_metrics(config):
+    """Run all metrics based on a configuration dictionary.
+
+    :param config: Dictionary with keys for each metric's parameters.
+                   See example_config.json for the expected format.
+    """
+    from .helper_scripts.io_utils import load_image_data, ensure_output_dir, parse_slices
+
+    target_directory = config.get('output_dir', './results')
+    ensure_output_dir(target_directory)
+    pixel_size = config['pixel_size']
 
     # Calculate the NPS
-    # TODO: Update this path to your reconstruction volume
     print("Calculating the NPS")
-    image_data = vff.read_vff("data/results/your_reconstruction.vff", verbose=False)[1]
-    image_data_NPS = image_data[np.concatenate((np.arange(0, 30), np.arange(140, 182))), :, :]
-    ROI_bounds_NPS = np.array([[308, 714, 1116, 1522],[552, 958, 1632, 2038],[1024, 1430, 1896, 2302],[1568, 1974, 1688, 2094],[1892, 2298, 1148, 1554], [1576, 1982, 512, 918], [1040, 1446, 304, 710], [544, 950, 544, 950]])
+    nps_cfg = config['nps']
+    image_data_NPS = load_image_data(nps_cfg['input'])
+    if 'slices' in nps_cfg and nps_cfg['slices']:
+        image_data_NPS = image_data_NPS[parse_slices(nps_cfg['slices'])]
+    ROI_bounds_NPS = np.array(nps_cfg['roi_bounds'])
 
-    _ = NPS_calculator.get_NPS(image_data_NPS, ROI_bounds_NPS, pixel_size=0.025, target_directory=target_directory, plot_results=True)
+    _ = NPS_calculator.get_NPS(image_data_NPS, ROI_bounds_NPS, pixel_size=pixel_size,
+                               target_directory=target_directory, plot_results=True)
 
     # Calculate the MTF
     print("Calculating the MTF")
-    image_data = vff.read_vff("data/scans/phantom/Halfscan-100ms/Halfscan-100ms-25um-slanted-edge.vff", verbose=False)[1]
-    image_data_MTF = image_data[10:160, :, :]
-    crop_indices_MTF = [732, 1940, 1160, 1548] # ymin, ymax, xmin, xmax
-    _ = MTF_calculator.get_MTF(image_data_MTF, crop_indices_MTF, find_absolute_MTF=True, pixel_size=0.025,
-                               target_directory=target_directory, plot_results=True, edge_angle=5.5, high_to_low=True)
+    mtf_cfg = config['mtf']
+    image_data_MTF = load_image_data(mtf_cfg['input'])
+    if 'slices' in mtf_cfg and mtf_cfg['slices']:
+        image_data_MTF = image_data_MTF[parse_slices(mtf_cfg['slices'])]
+    crop_indices_MTF = mtf_cfg['crop_indices']
+
+    _ = MTF_calculator.get_MTF(image_data_MTF, crop_indices_MTF, find_absolute_MTF=True, pixel_size=pixel_size,
+                               target_directory=target_directory, plot_results=True,
+                               edge_angle=mtf_cfg.get('edge_angle', 5.5),
+                               high_to_low=mtf_cfg.get('high_to_low', True))
 
     # Calculate the NEQ
     print("Calculating the NEQ")
-    _ = NEQ_calculator.get_NEQ(image_data_MTF, image_data_NPS, crop_indices_MTF, ROI_bounds_NPS, pixel_size=0.025,
+    _ = NEQ_calculator.get_NEQ(image_data_MTF, image_data_NPS, crop_indices_MTF, ROI_bounds_NPS, pixel_size=pixel_size,
                                target_directory=target_directory, plot_results=True)
 
     # Calculate the TTF
     print("Calculating the TTF")
-    image_data = vff.read_vff("data/scans/phantom/Halfscan-100ms/Halfscan-100ms-25um-materials.vff", verbose=False)[1]
-    image_data_TTF = image_data[30:130, :, :]
-    centre_pixels_TTF = [[1335, 2141], [765, 1914], [528, 1348], [755, 782], [1321, 546], [1890, 773], [2128, 1335], [1330, 1341]]
-    radius_TTF = 120
-    materials_TTF = ['Teflon', 'HD POLY', 'Fat', 'Tissue', 'Lucite', 'Water', 'SB3', 'Air']
-    _ = TTF_calculator.get_TTF(image_data_TTF, centre_pixels_TTF, radius_TTF, materials=materials_TTF, find_absolute_TTF=True,
-                               pixel_size=0.025, target_directory=target_directory, plot_results=True)
+    ttf_cfg = config['ttf']
+    image_data_TTF = load_image_data(ttf_cfg['input'])
+    if 'slices' in ttf_cfg and ttf_cfg['slices']:
+        image_data_TTF = image_data_TTF[parse_slices(ttf_cfg['slices'])]
+    centre_pixels_TTF = ttf_cfg['centre_pixels']
+    radius_TTF = ttf_cfg['radius']
+    materials_TTF = ttf_cfg['materials']
+
+    _ = TTF_calculator.get_TTF(image_data_TTF, centre_pixels_TTF, radius_TTF, materials=materials_TTF,
+                               find_absolute_TTF=True, pixel_size=pixel_size,
+                               target_directory=target_directory, plot_results=True)
 
     # Calculate the detectability index d'
     print("Calculating the detectability index d'")
-    task_function_object_size = 0.2
-    task_function_data = d_prime_calculator.create_circular_task_function(-160, task_function_object_size, pixel_size=0.025,
-                                                                          image_dimension=np.min(image_data.shape[1:]))
+    dp_cfg = config['d_prime']
+    task_function_object_size = dp_cfg['task_object_size']
+    task_function_data = d_prime_calculator.create_circular_task_function(
+        dp_cfg['task_contrast'], task_function_object_size,
+        pixel_size=pixel_size,
+        image_dimension=np.min(image_data_TTF.shape[1:]))
 
-    _ = d_prime_calculator.get_d_prime(image_data_TTF, centre_pixels_TTF, radius_TTF, materials_TTF, image_data_NPS, ROI_bounds_NPS,
-            task_function_data=task_function_data, task_function_material='Fat', task_function_object_size=task_function_object_size,
-            pixel_size=0.025, verbose=True, plot_results=True, target_directory=target_directory)
+    _ = d_prime_calculator.get_d_prime(
+        image_data_TTF, centre_pixels_TTF, radius_TTF, materials_TTF,
+        image_data_NPS, ROI_bounds_NPS,
+        task_function_data=task_function_data,
+        task_function_material=dp_cfg['task_material'],
+        task_function_object_size=task_function_object_size,
+        pixel_size=pixel_size, verbose=True, plot_results=True,
+        target_directory=target_directory)
+
+    print("All metrics calculated successfully. Results saved to:", target_directory)
+
+
+def parse_args():
+    import argparse
+    parser = argparse.ArgumentParser(
+        description='Calculate all CT image quality metrics (MTF, NPS, NEQ, TTF, d\') from a JSON config file.')
+    parser.add_argument('--config', required=True, help='Path to JSON configuration file (see example_config.json)')
+    parser.add_argument('--output_dir', type=str, default=None,
+                        help='Override output directory from config')
+    parser.add_argument('--show', action='store_true', help='Display plots interactively')
+    return parser.parse_args()
+
+
+def main():
+    import json
+    args = parse_args()
+
+    with open(args.config) as f:
+        config = json.load(f)
+
+    if args.output_dir is not None:
+        config['output_dir'] = args.output_dir
+
+    run_all_metrics(config)
+
+    if args.show:
+        import matplotlib.pyplot as plt
+        plt.show()
+
+
+if __name__ == '__main__':
+    main()

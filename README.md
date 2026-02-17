@@ -4,6 +4,21 @@
 
 CT image quality metric calculators for micro-CT reconstructed volumes: Modulation Transfer Function (MTF), Noise Power Spectrum (NPS), Noise-Equivalent Quanta (NEQ), Task Transfer Function (TTF), and Detectability Index (d').
 
+## Quick Start
+
+```bash
+# Install
+git clone https://github.com/UBC-Ford-lab/micro_ct_image_metric_analysis.git
+cd micro_ct_image_metric_analysis
+pip install -e .
+
+# Run MTF calculation on a .npy file
+ct-mtf --input phantom.npy --crop_indices 270,664,522,640 --pixel_size 0.085 --edge_angle 5.4
+
+# Run all metrics from a config file
+ct-metrics --config example_config.json
+```
+
 ## Overview
 
 This package provides a complete suite of spatial-frequency-domain image quality metrics for evaluating CT reconstructions, following standards from AAPM Report 233 and ISO 12233. Each metric can be computed independently or all together via the `all_metrics_calculator` module.
@@ -23,17 +38,21 @@ This package provides a complete suite of spatial-frequency-domain image quality
 ```
 metric_calculators/              # Package root (also repo root)
 ├── __init__.py
-├── all_metrics_calculator.py    # Run all metrics in sequence
-├── mtf_calculator.py            # Modulation Transfer Function
-├── nps_calculator.py            # Noise Power Spectrum
-├── neq_calculator.py            # Noise-Equivalent Quanta
-├── ttf_calculator.py            # Task Transfer Function
-├── d_prime_calculator.py        # Detectability Index (d')
+├── all_metrics_calculator.py   # Run all metrics in sequence
+├── mtf_calculator.py           # Modulation Transfer Function
+├── nps_calculator.py           # Noise Power Spectrum
+├── neq_calculator.py           # Noise-Equivalent Quanta
+├── ttf_calculator.py           # Task Transfer Function
+├── d_prime_calculator.py       # Detectability Index (d')
 ├── helper_scripts/
 │   ├── __init__.py
+│   ├── io_utils.py             # Shared I/O utilities and CLI argument parsers
+│   ├── vff_io.py               # VFF file reader/writer (bundled from muPIU-Net)
 │   ├── lsf_processing.py       # Line Spread Function processing (detrend, window, center)
 │   ├── all_models_comparison_plot.py      # Multi-model MTF/NPS/NEQ comparison figure
 │   └── plot_reconstruction_comparison.py  # Visual slice comparison figure
+├── example_config.json         # Example config for all_metrics_calculator
+├── requirements.txt
 ├── pyproject.toml
 ├── LICENSE
 └── README.md
@@ -58,6 +77,184 @@ git submodule add https://github.com/UBC-Ford-lab/micro_ct_image_metric_analysis
 ```
 
 No `pip install` needed -- just ensure the parent repo root is on `sys.path` (e.g., via `pip install -e .` on the parent).
+
+## Input Data Format
+
+Image data should be 3D numpy arrays with shape `(z, y, x)` where `z` is the slice axis. Supported formats:
+
+- **`.npy`** (recommended): Save with `np.save('volume.npy', image_array)`
+- **`.npz`**: The first array in the archive is used. Save with `np.savez('volume.npz', image_array)`
+- **`.vff`**: Natively supported via the bundled `vff_io` reader (no external dependencies needed)
+
+To convert from other formats:
+
+```python
+import numpy as np
+
+# From TIFF stack
+from skimage import io
+volume = io.imread('stack.tif')  # shape: (z, y, x)
+np.save('volume.npy', volume)
+
+# From DICOM
+import pydicom, glob
+files = sorted(glob.glob('dicom_dir/*.dcm'))
+volume = np.stack([pydicom.dcmread(f).pixel_array for f in files])
+np.save('volume.npy', volume)
+```
+
+## CLI Reference
+
+All commands are available after `pip install -e .`. Use `--help` on any command for full details.
+
+### ct-mtf -- Modulation Transfer Function
+
+```bash
+ct-mtf --input volume.npy \
+       --crop_indices 270,664,522,640 \
+       --pixel_size 0.085 \
+       --edge_angle 5.4 \
+       --slices 228:229 \
+       --output_dir ./results
+```
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `--input` | Yes | Path to image file (.npy, .npz, or .vff) |
+| `--crop_indices` | Yes | Crop region as y1,y2,x1,x2 |
+| `--pixel_size` | No | Pixel size in mm (default: 0.05) |
+| `--edge_angle` | No | Slanted edge angle in degrees (default: 5.0) |
+| `--slices` | No | Slice selection (e.g. "10:160" or "0:30,140:182") |
+| `--high_to_low` | No | Edge goes from high to low (default) |
+| `--low_to_high` | No | Edge goes from low to high |
+| `--relative` | No | Calculate relative MTF instead of absolute |
+| `--output_dir` | No | Output directory (default: ./results) |
+| `--no_plot` | No | Disable plot generation |
+| `--show` | No | Display plots interactively |
+
+### ct-nps -- Noise Power Spectrum
+
+```bash
+ct-nps --input volume.npy \
+       --roi_bounds "178,294,510,626;258,374,750,866;310,426,328,444" \
+       --pixel_size 0.085 \
+       --slices "0:30,140:182" \
+       --output_dir ./results
+```
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `--input` | Yes | Path to image file |
+| `--roi_bounds` | Yes | ROI bounds as semicolon-separated y1,y2,x1,x2 groups |
+| `--pixel_size` | Yes | Pixel size in mm |
+| `--slices` | No | Slice selection |
+| `--filter_low_freq` | No | Filter low frequency components |
+| `--output_dir` | No | Output directory (default: ./results) |
+| `--no_plot` | No | Disable plot generation |
+| `--show` | No | Display plots interactively |
+
+### ct-neq -- Noise-Equivalent Quanta
+
+```bash
+ct-neq --input_mtf mtf_volume.npy \
+       --input_nps nps_volume.npy \
+       --crop_indices 270,664,522,640 \
+       --roi_bounds "178,294,510,626;258,374,750,866" \
+       --pixel_size 0.085 \
+       --slices_mtf 228:229 \
+       --slices_nps "0:30,140:182" \
+       --output_dir ./results
+```
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `--input_mtf` | Yes | Path to MTF image file |
+| `--input_nps` | Yes | Path to NPS image file |
+| `--crop_indices` | Yes | MTF crop region as y1,y2,x1,x2 |
+| `--roi_bounds` | Yes | NPS ROI bounds |
+| `--pixel_size` | Yes | Pixel size in mm |
+| `--slices_mtf` | No | Slice selection for MTF data |
+| `--slices_nps` | No | Slice selection for NPS data |
+| `--low_to_high` | No | MTF edge goes from low to high |
+| `--output_dir` | No | Output directory (default: ./results) |
+| `--no_plot` | No | Disable plot generation |
+| `--show` | No | Display plots interactively |
+
+### ct-ttf -- Task Transfer Function
+
+```bash
+ct-ttf --input volume.npy \
+       --centre_pixels "1335,2141;765,1914;528,1348" \
+       --radius 120 \
+       --materials "Teflon,HD POLY,Fat" \
+       --pixel_size 0.025 \
+       --slices 30:130 \
+       --output_dir ./results
+```
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `--input` | Yes | Path to image file |
+| `--centre_pixels` | Yes | Centre pixels as semicolon-separated y,x pairs |
+| `--radius` | Yes | Radius of circular edges in pixels |
+| `--materials` | No | Comma-separated material names |
+| `--slices` | No | Slice selection |
+| `--pixel_size` | No | Pixel size in mm (default: 0.05) |
+| `--relative` | No | Calculate relative TTF |
+| `--output_dir` | No | Output directory (default: ./results) |
+| `--no_plot` | No | Disable plot generation |
+| `--show` | No | Display plots interactively |
+
+### ct-dprime -- Detectability Index (d')
+
+```bash
+ct-dprime --input_ttf ttf_volume.npy \
+          --input_nps nps_volume.npy \
+          --centre_pixels "686,398;418,132;153,398;229,586" \
+          --radius 30 \
+          --materials "SB3,Teflon,Fat,Tissue" \
+          --roi_bounds "194,400,175,381;440,646,175,381" \
+          --task_material Fat \
+          --task_contrast -160 \
+          --task_object_size 0.2 \
+          --pixel_size 0.075 \
+          --output_dir ./results
+```
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `--input_ttf` | Yes | Path to TTF image file |
+| `--input_nps` | Yes | Path to NPS image file |
+| `--centre_pixels` | Yes | Centre pixels as semicolon-separated y,x pairs |
+| `--radius` | Yes | Radius of circular edges in pixels |
+| `--materials` | Yes | Comma-separated material names |
+| `--roi_bounds` | Yes | NPS ROI bounds |
+| `--task_material` | Yes | Task function material name |
+| `--task_contrast` | No | Task function contrast in HU (default: -160) |
+| `--task_object_size` | No | Task function object radius in mm (default: 0.2) |
+| `--slices_ttf` | No | Slice selection for TTF data |
+| `--slices_nps` | No | Slice selection for NPS data |
+| `--pixel_size` | No | Pixel size in mm (default: 0.05) |
+| `--output_dir` | No | Output directory (default: ./results) |
+| `--no_plot` | No | Disable plot generation |
+| `--show` | No | Display plots interactively |
+| `--quiet` | No | Suppress console output |
+
+### ct-metrics -- All Metrics at Once
+
+```bash
+ct-metrics --config example_config.json --output_dir ./results
+```
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `--config` | Yes | Path to JSON configuration file |
+| `--output_dir` | No | Override output directory from config |
+| `--show` | No | Display plots interactively |
+
+## Configuration File
+
+The `ct-metrics` command reads all parameters from a JSON config file. See [`example_config.json`](example_config.json) for the full template. The config has a top-level `pixel_size` and `output_dir`, plus sections for each metric (`nps`, `mtf`, `ttf`, `d_prime`). NEQ is computed automatically from the MTF and NPS data.
 
 ## Usage
 
@@ -167,8 +364,16 @@ d_prime = d_prime_calculator.get_d_prime(
 #### All Metrics at Once
 
 ```python
-# Run from parent project root:
-python -m metric_calculators.all_metrics_calculator
+# Via CLI:
+#   ct-metrics --config example_config.json
+
+# Via Python:
+from metric_calculators.all_metrics_calculator import run_all_metrics
+import json
+
+with open('example_config.json') as f:
+    config = json.load(f)
+run_all_metrics(config)
 ```
 
 ### CLI -- Comparison Plots
@@ -195,7 +400,7 @@ python -m metric_calculators.helper_scripts.plot_reconstruction_comparison \
 - Matplotlib
 - photutils
 
-When used as a submodule within muPIU-Net, the `reconstruction` package (for VFF I/O) is provided by the parent project.
+VFF file support is included out of the box. The `VFFDataset` class (for raw projection loading) additionally requires `xmltodict` and `torch`.
 
 ## License
 

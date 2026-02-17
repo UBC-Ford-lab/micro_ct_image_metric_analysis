@@ -31,8 +31,16 @@ dependencies = [
 [project.urls]
 Repository = "https://github.com/UBC-Ford-lab/micro_ct_image_metric_analysis"
 
-[tool.setuptools.packages.find]
-include = ["metric_calculators*"]
+[project.scripts]
+ct-mtf = "metric_calculators.mtf_calculator:main"
+ct-nps = "metric_calculators.nps_calculator:main"
+ct-neq = "metric_calculators.neq_calculator:main"
+ct-ttf = "metric_calculators.ttf_calculator:main"
+ct-dprime = "metric_calculators.d_prime_calculator:main"
+ct-metrics = "metric_calculators.all_metrics_calculator:main"
+
+[tool.setuptools.package-dir]
+"metric_calculators" = "."
 
 [tool.setuptools]
 py-modules = []

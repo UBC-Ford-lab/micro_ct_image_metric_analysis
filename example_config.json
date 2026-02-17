@@ -1,0 +1,44 @@
+{
+    "pixel_size": 0.025,
+    "output_dir": "./results",
+
+    "nps": {
+        "input": "path/to/nps_volume.npy",
+        "slices": "0:30,140:182",
+        "roi_bounds": [
+            [308, 714, 1116, 1522],
+            [552, 958, 1632, 2038],
+            [1024, 1430, 1896, 2302],
+            [1568, 1974, 1688, 2094],
+            [1892, 2298, 1148, 1554],
+            [1576, 1982, 512, 918],
+            [1040, 1446, 304, 710],
+            [544, 950, 544, 950]
+        ]
+    },
+
+    "mtf": {
+        "input": "path/to/mtf_volume.npy",
+        "slices": "10:160",
+        "crop_indices": [732, 1940, 1160, 1548],
+        "edge_angle": 5.5,
+        "high_to_low": true
+    },
+
+    "ttf": {
+        "input": "path/to/ttf_volume.npy",
+        "slices": "30:130",
+        "centre_pixels": [
+            [1335, 2141], [765, 1914], [528, 1348], [755, 782],
+            [1321, 546], [1890, 773], [2128, 1335], [1330, 1341]
+        ],
+        "radius": 120,
+        "materials": ["Teflon", "HD POLY", "Fat", "Tissue", "Lucite", "Water", "SB3", "Air"]
+    },
+
+    "d_prime": {
+        "task_material": "Fat",
+        "task_contrast": -160,
+        "task_object_size": 0.2
+    }
+}

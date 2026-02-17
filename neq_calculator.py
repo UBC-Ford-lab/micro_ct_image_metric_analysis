@@ -85,39 +85,52 @@ def get_NEQ(image_data_MTF, image_data_NPS, crop_indices_MTF, ROI_bounds_NPS, pi
         plt.tight_layout()
         plt.savefig(os.path.join(target_directory, 'NEQ_plot.png'))
         plt.savefig(os.path.join(target_directory, 'NEQ_plot.pdf'))
+        plt.close('all')
 
     return freqs, NEQ
 
+def parse_args():
+    import argparse
+    from .helper_scripts.io_utils import parse_int_list, parse_roi_bounds, parse_slices
+    parser = argparse.ArgumentParser(description='Calculate the Noise-Equivalent Quanta (NEQ) from CT image data.')
+    parser.add_argument('--input_mtf', required=True, help='Path to MTF image file (.npy, .npz, or .vff)')
+    parser.add_argument('--input_nps', required=True, help='Path to NPS image file (.npy, .npz, or .vff)')
+    parser.add_argument('--crop_indices', required=True, type=parse_int_list,
+                        help='MTF crop region as y1,y2,x1,x2 (e.g. "270,664,522,640")')
+    parser.add_argument('--roi_bounds', required=True, type=parse_roi_bounds,
+                        help='NPS ROI bounds as semicolon-separated y1,y2,x1,x2 groups')
+    parser.add_argument('--slices_mtf', type=str, default=None, help='Slice selection for MTF data')
+    parser.add_argument('--slices_nps', type=str, default=None, help='Slice selection for NPS data')
+    parser.add_argument('--pixel_size', type=float, required=True, help='Pixel size in mm')
+    parser.add_argument('--low_to_high', action='store_true', help='MTF edge goes from low to high intensity')
+    parser.add_argument('--output_dir', type=str, default='./results', help='Output directory (default: ./results)')
+    parser.add_argument('--no_plot', action='store_true', help='Disable plot generation')
+    parser.add_argument('--show', action='store_true', help='Display plots interactively')
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    from .helper_scripts.io_utils import load_image_data, ensure_output_dir, parse_slices
+
+    image_data_MTF = load_image_data(args.input_mtf)
+    if args.slices_mtf is not None:
+        image_data_MTF = image_data_MTF[parse_slices(args.slices_mtf)]
+
+    image_data_NPS = load_image_data(args.input_nps)
+    if args.slices_nps is not None:
+        image_data_NPS = image_data_NPS[parse_slices(args.slices_nps)]
+
+    output_dir = ensure_output_dir(args.output_dir)
+
+    _ = get_NEQ(image_data_MTF, image_data_NPS, args.crop_indices, args.roi_bounds,
+                pixel_size=args.pixel_size, target_directory=output_dir,
+                plot_results=not args.no_plot, high_to_low_MTF=not args.low_to_high)
+
+    if args.show:
+        import matplotlib.pyplot as plt
+        plt.show()
+
+
 if __name__ == '__main__':
-    # Load the image data
-    from reconstruction.ct_core import vff_io as vff
-    image_data = vff.read_vff("data/results/repaint_reconstruction.vff", verbose=False)[1]
-
-    # select MTF slices
-    # Define the MTF crop indices (y1, y2, x1, x2)
-    image_data_MTF = image_data[228:229, :, :]
-    crop_indices_MTF = [270, 664, 522, 640]
-
-    # select NPS slices
-    # Define the ROIs over which to compute the NPS (y1, y2, x1, x2) in pixel coordinates
-    image_data_NPS = image_data[np.concatenate((np.arange(204, 208), np.arange(216, 226))), :, :]
-    ROI_bounds_NPS = np.array([[178, 294, 510, 626], [258, 374, 750, 866], [310, 426, 328, 444], [432, 548, 830, 946], [488, 604, 248, 364], [580, 696, 730, 846], [624, 740, 414, 530], [724, 840, 598, 714]])
-
-
-    _ = get_NEQ(image_data_MTF, image_data_NPS, crop_indices_MTF, ROI_bounds_NPS, pixel_size=0.085, target_directory=os.getcwd(),
-                plot_results=True)
-
-
-'''
-For data/results/ground_truth_reconstruction.vff
-    # select MTF slices
-    # Define the MTF crop indices (y1, y2, x1, x2)
-    image_data_MTF = image_data[228:229, :, :]
-    crop_indices_MTF = [270, 664, 522, 640]
-
-    # select NPS slices
-    # Define the ROIs over which to compute the NPS (y1, y2, x1, x2) in pixel coordinates
-    image_data_NPS = image_data[np.concatenate((np.arange(204, 208), np.arange(216, 226))), :, :]
-    ROI_bounds_NPS = np.array([[178, 294, 510, 626], [258, 374, 750, 866], [310, 426, 328, 444], [432, 548, 830, 946], [488, 604, 248, 364], [580, 696, 730, 846], [624, 740, 414, 530], [724, 840, 598, 714]])
-
-'''
+    main()

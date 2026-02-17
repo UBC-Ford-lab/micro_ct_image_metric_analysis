@@ -100,6 +100,7 @@ def get_d_prime(image_data_TTF, centre_pixels_TTF, radius_TTF, materials_TTF, im
 
         plt.tight_layout()
         plt.savefig(target_directory+'/Detectability_plot.png', dpi=300)
+        plt.close('all')
 
     return d_prime
 
@@ -122,24 +123,65 @@ def create_circular_task_function(contrast, radius, pixel_size=0.05, image_dimen
 
     return task_function_data
 
+def parse_args():
+    import argparse
+    from .helper_scripts.io_utils import parse_centre_pixels, parse_roi_bounds, parse_slices
+    parser = argparse.ArgumentParser(description='Calculate the Detectability Index (d\') from CT image data.')
+    parser.add_argument('--input_ttf', required=True, help='Path to TTF image file (.npy, .npz, or .vff)')
+    parser.add_argument('--input_nps', required=True, help='Path to NPS image file (.npy, .npz, or .vff)')
+    parser.add_argument('--centre_pixels', required=True, type=parse_centre_pixels,
+                        help='Centre pixels as semicolon-separated y,x pairs (e.g. "686,398;418,132")')
+    parser.add_argument('--radius', required=True, type=int, help='Radius of circular edges in pixels')
+    parser.add_argument('--materials', required=True, type=str,
+                        help='Comma-separated material names (e.g. "SB3,Teflon,Fat,Tissue")')
+    parser.add_argument('--roi_bounds', required=True, type=parse_roi_bounds,
+                        help='NPS ROI bounds as semicolon-separated y1,y2,x1,x2 groups')
+    parser.add_argument('--task_material', required=True, type=str, help='Task function material (e.g. "Fat")')
+    parser.add_argument('--task_contrast', type=float, default=-160, help='Task function contrast in HU (default: -160)')
+    parser.add_argument('--task_object_size', type=float, default=0.2, help='Task function object radius in mm (default: 0.2)')
+    parser.add_argument('--slices_ttf', type=str, default=None, help='Slice selection for TTF data')
+    parser.add_argument('--slices_nps', type=str, default=None, help='Slice selection for NPS data')
+    parser.add_argument('--pixel_size', type=float, default=0.05, help='Pixel size in mm (default: 0.05)')
+    parser.add_argument('--output_dir', type=str, default='./results', help='Output directory (default: ./results)')
+    parser.add_argument('--no_plot', action='store_true', help='Disable plot generation')
+    parser.add_argument('--show', action='store_true', help='Display plots interactively')
+    parser.add_argument('--quiet', action='store_true', help='Suppress console output')
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    from .helper_scripts.io_utils import load_image_data, ensure_output_dir, parse_slices
+
+    image_data_TTF = load_image_data(args.input_ttf)
+    if args.slices_ttf is not None:
+        image_data_TTF = image_data_TTF[parse_slices(args.slices_ttf)]
+
+    image_data_NPS = load_image_data(args.input_nps)
+    if args.slices_nps is not None:
+        image_data_NPS = image_data_NPS[parse_slices(args.slices_nps)]
+
+    materials = [m.strip() for m in args.materials.split(',')]
+    output_dir = ensure_output_dir(args.output_dir)
+
+    task_function_data = create_circular_task_function(
+        args.task_contrast, args.task_object_size,
+        pixel_size=args.pixel_size,
+        image_dimension=np.min(image_data_TTF.shape[1:])
+    )
+
+    _ = get_d_prime(image_data_TTF, args.centre_pixels, args.radius, materials,
+                    image_data_NPS, args.roi_bounds,
+                    task_function_data=task_function_data,
+                    task_function_material=args.task_material,
+                    task_function_object_size=args.task_object_size,
+                    pixel_size=args.pixel_size, verbose=not args.quiet,
+                    plot_results=not args.no_plot, target_directory=output_dir)
+
+    if args.show:
+        import matplotlib.pyplot as plt
+        plt.show()
+
+
 if __name__ == '__main__':
-    # Load the image data
-    from reconstruction.ct_core import vff_io as vff
-    image_data = vff.read_vff("/Users/falk/Downloads/Shelley phantom full scan 75um 16ms.vff", verbose=False)[1]
-
-    image_data_TTF = image_data[15:22, :, :]
-    centre_pixels_TTF = [[686, 398], [418, 132], [153, 398], [229, 586]]
-    radius_TTF = 30
-    materials_TTF = ['SB3', 'Teflon', 'Fat', 'Tissue']
-
-    image_data_NPS = image_data[175:205, :, :]
-    ROI_bounds_NPS = np.array([[194, 400, 175, 381],[440, 646, 175, 381],[194, 400, 410, 616],[440, 646, 410, 616]])
-
-    task_function_object_size = 0.2
-
-    task_function_data = create_circular_task_function(-160, task_function_object_size, pixel_size=0.075, image_dimension=np.min(image_data.shape[1:]))
-
-
-    _ = get_d_prime(image_data_TTF, centre_pixels_TTF, radius_TTF, materials_TTF, image_data_NPS, ROI_bounds_NPS,
-                    task_function_data=task_function_data, task_function_material='Fat', task_function_object_size=task_function_object_size,
-                    pixel_size=0.075, verbose=True, plot_results=True, target_directory=os.getcwd())
+    main()
