@@ -63,10 +63,6 @@ def get_MTF(image_data, crop_indices, find_absolute_MTF=True, pixel_size=0.05,
     # iterate through the slices and compute the MTF
     for i in range(image_data.shape[0]):
 
-        # Normalise the image data
-        image_data[i] = image_data[i] - image_data[i].min()
-        image_data[i] = 255*image_data[i] / image_data[i].max()
-
         # Calculate the shifted edge response function from all rows
         ERF = np.zeros((4*len(image_data[i][0, :])))
         ERF[::4] += np.array(image_data[i][0, :]) # first we fill the first row into every 4th element of the ERF (4x supersampled)

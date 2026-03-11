@@ -32,6 +32,7 @@ This package provides a complete suite of spatial-frequency-domain image quality
 | **NEQ** | Noise-Equivalent Quanta -- combines MTF and NPS into a single signal-to-noise metric | MTF + NPS inputs |
 | **TTF** | Task Transfer Function -- contrast-dependent resolution via circular edge inserts | Circular insert phantom slices |
 | **d'** | Detectability Index -- task-based detectability combining TTF, NPS, and a task function | TTF + NPS inputs + task function |
+| **d' (NPW)** | NPW-observer Detectability Index -- frequency-domain d' for disc objects of multiple sizes, from pre-computed MTF and NPS (AAPM TG-233) | MTF + NPS frequency curves |
 
 ## Package Structure
 
@@ -207,18 +208,22 @@ ct-ttf --input volume.npy \
 
 ### ct-dprime -- Detectability Index (d')
 
+Two modes are available: **TTF-based** (original, from circular phantom inserts) and **NPW** (frequency-domain, from pre-computed MTF/NPS curves).
+
+#### TTF mode (circular inserts)
+
 ```bash
-ct-dprime --input_ttf ttf_volume.npy \
-          --input_nps nps_volume.npy \
-          --centre_pixels "686,398;418,132;153,398;229,586" \
-          --radius 30 \
-          --materials "SB3,Teflon,Fat,Tissue" \
-          --roi_bounds "194,400,175,381;440,646,175,381" \
-          --task_material Fat \
-          --task_contrast -160 \
-          --task_object_size 0.2 \
-          --pixel_size 0.075 \
-          --output_dir ./results
+ct-dprime ttf --input_ttf ttf_volume.npy \
+              --input_nps nps_volume.npy \
+              --centre_pixels "686,398;418,132;153,398;229,586" \
+              --radius 30 \
+              --materials "SB3,Teflon,Fat,Tissue" \
+              --roi_bounds "194,400,175,381;440,646,175,381" \
+              --task_material Fat \
+              --task_contrast -160 \
+              --task_object_size 0.2 \
+              --pixel_size 0.075 \
+              --output_dir ./results
 ```
 
 | Argument | Required | Description |
@@ -239,6 +244,32 @@ ct-dprime --input_ttf ttf_volume.npy \
 | `--no_plot` | No | Disable plot generation |
 | `--show` | No | Display plots interactively |
 | `--quiet` | No | Suppress console output |
+
+#### NPW mode (AAPM TG-233, from MTF/NPS curves)
+
+Computes the non-prewhitening matched-filter observer d' for multiple uniform disc sizes
+using the analytical Bessel-function task function (Samei et al., 2019).
+
+```bash
+ct-dprime npw --mtf_npz metrics_mtf.npz \
+              --nps_npz metrics_nps.npz \
+              --disc_diameters "0.15,0.5,1.0,3.0" \
+              --contrast 100 \
+              --output_dir ./results
+```
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `--mtf_npz` | Yes | .npz file with `mtf_freq` and `mtf` arrays |
+| `--nps_npz` | Yes | .npz file with `nps_freq` and `nps` arrays |
+| `--disc_diameters` | No | Comma-separated disc diameters in mm (default: 0.15,0.5,1.0,3.0) |
+| `--contrast` | No | Contrast in HU (default: 100, soft tissue) |
+| `--output_dir` | No | Output directory (default: ./results) |
+| `--no_plot` | No | Disable plot generation |
+| `--show` | No | Display plots interactively |
+
+Default disc diameters for micro-CT: **0.15 mm** (finest resolvable detail), **0.5 mm** (bronchioles), **1.0 mm** (small lesions), **3.0 mm** (larger structures).
+A feature is considered detectable when d' ≥ 3 (Rose criterion).
 
 ### ct-metrics -- All Metrics at Once
 
@@ -336,7 +367,7 @@ ttf_freq, ttf_array, cnr_array = ttf_calculator.get_TTF(
 )
 ```
 
-#### Detectability Index (d')
+#### Detectability Index (d') -- TTF-based
 
 ```python
 from metric_calculators import d_prime_calculator
@@ -359,6 +390,32 @@ d_prime = d_prime_calculator.get_d_prime(
     plot_results=True,
     target_directory='results/'
 )
+```
+
+#### Detectability Index (d') -- NPW observer (AAPM TG-233)
+
+Compute d' for multiple disc sizes from pre-computed MTF and NPS curves.
+Uses the non-prewhitening matched-filter (NPW) observer with analytical
+Bessel-function task functions for uniform discs.
+
+```python
+from metric_calculators import d_prime_calculator
+
+# From pre-computed MTF and NPS (e.g., from mtf_calculator / nps_calculator)
+result = d_prime_calculator.get_d_prime_npw(
+    mtf_freq, mtf,                              # 1D arrays from get_MTF()
+    nps_freq, nps,                              # 1D arrays from get_NPS()
+    disc_diameters_mm=[0.15, 0.5, 1.0, 3.0],   # micro-CT task sizes
+    contrast_hu=100.0,                          # soft-tissue contrast
+    normalize_mtf=True,
+    plot_results=True,
+    target_directory='results/',
+)
+
+# result['d_prime']            -- array of d' values per disc diameter
+# result['disc_diameters_mm']  -- corresponding diameters
+# result['contrast_hu']        -- contrast used
+# Features with d' >= 3 are detectable (Rose criterion)
 ```
 
 #### All Metrics at Once

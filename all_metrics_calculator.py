@@ -83,6 +83,32 @@ def run_all_metrics(config):
         pixel_size=pixel_size, verbose=True, plot_results=True,
         target_directory=target_directory)
 
+    # Calculate the NPW detectability index (frequency-domain, from MTF/NPS)
+    if 'd_prime_npw' in config:
+        print("Calculating the NPW detectability index d' (frequency-domain)")
+        npw_cfg = config['d_prime_npw']
+
+        # Compute MTF and NPS if not already done
+        mtf_freq, mtf_val = MTF_calculator.get_MTF(
+            image_data_MTF, crop_indices_MTF, find_absolute_MTF=True,
+            pixel_size=pixel_size, target_directory=None, plot_results=False,
+            edge_angle=mtf_cfg.get('edge_angle', 5.5),
+            high_to_low=mtf_cfg.get('high_to_low', True))
+        nps_freq, nps_val = NPS_calculator.get_NPS(
+            image_data_NPS, ROI_bounds_NPS, pixel_size=pixel_size,
+            target_directory=None, plot_results=False)
+
+        result = d_prime_calculator.get_d_prime_npw(
+            mtf_freq, mtf_val, nps_freq, nps_val,
+            disc_diameters_mm=npw_cfg.get('disc_diameters_mm'),
+            contrast_hu=npw_cfg.get('contrast_hu'),
+            plot_results=True, target_directory=target_directory)
+
+        print(f"  NPW d' (ΔC={result['contrast_hu']:.0f} HU): "
+              + ", ".join(f"{d:.2f}mm→{dp:.1f}"
+                          for d, dp in zip(result['disc_diameters_mm'],
+                                           result['d_prime'])))
+
     print("All metrics calculated successfully. Results saved to:", target_directory)
 
 
