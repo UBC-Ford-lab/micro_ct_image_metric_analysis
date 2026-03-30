@@ -5,10 +5,9 @@
 import numpy as np
 import os
 import matplotlib.pyplot as plt
-from scipy.signal import savgol_filter
 
 def get_MTF(image_data, crop_indices, find_absolute_MTF=True, pixel_size=0.05,
-            target_directory=os.getcwd(), plot_results=True, edge_angle=5.0, high_to_low=True, process_LSF=True, return_ERF=False, normalize_MTF=True):
+            target_directory=os.getcwd(), plot_results=True, edge_angle=5.0, high_to_low=True, process_LSF=True, return_ERF=False, normalize_MTF=True, **kwargs):
     """
     This function calculates the Modulation Transfer Function (MTF) on image data. Note that number of data points for the fit,
     needs to be a 4x supersampled version of image data according to ISO 12233
@@ -52,88 +51,129 @@ def get_MTF(image_data, crop_indices, find_absolute_MTF=True, pixel_size=0.05,
     image_data = image_data[:, crop_indices[0]:crop_indices[1], crop_indices[2]:crop_indices[3]].astype(np.float64)
 
 
-    # Create arrays to store the results
-    array_1_length = (4*image_data.shape[2]-int((crop_indices[1]-crop_indices[0])*np.tan(4*edge_angle*np.pi/180)))//4
+    # --- ERF construction via interpolation-based row alignment ---
+    # Each row of the crop samples the slanted edge at a different sub-pixel
+    # position.  We shift each row by the exact fractional offset (using
+    # linear interpolation) onto a common 4x-oversampled grid, then average.
+    # This avoids the smearing caused by int()-rounding in the old np.roll
+    # approach.
+    from scipy.interpolate import interp1d
+
+    nrows = crop_indices[1] - crop_indices[0]
+    ncols = image_data.shape[2]
+    shift_per_row = np.tan(np.radians(edge_angle))  # pixels per row
+    total_shift = nrows * shift_per_row              # total edge travel in pixels
+
+    # 4x oversampled output grid: covers the region common to all shifted rows
+    subsample = 4
+    erf_pixel_size = pixel_size / subsample
+    # Usable range after accounting for the shift across all rows
+    usable_cols = ncols - int(np.ceil(total_shift)) - 1
+    n_erf = usable_cols * subsample
+    x_erf_grid = np.arange(n_erf) * erf_pixel_size  # common output grid (mm)
+
+    # Pre-compute for array sizing: final ERF length after block-averaging
+    array_1_length = n_erf // subsample
     arrays_shape_1 = (image_data.shape[0], array_1_length)
     ERF_array = np.zeros(arrays_shape_1)
     LSF_array = np.zeros(arrays_shape_1)
-    LSF_x_axis = np.linspace(0, LSF_array.shape[1]*pixel_size, LSF_array.shape[1])
+    LSF_x_axis = np.linspace(0, array_1_length * pixel_size, array_1_length)
     MTF_array = np.zeros(arrays_shape_1)
 
-    # iterate through the slices and compute the MTF
+    # Collect per-slice results (lengths may vary due to LSF processing)
+    _erf_list = []
+    _lsf_list = []
+    _lsf_x_list = []
+
+    # iterate through the slices and compute the ERF and LSF
     for i in range(image_data.shape[0]):
 
-        # Calculate the shifted edge response function from all rows
-        ERF = np.zeros((4*len(image_data[i][0, :])))
-        ERF[::4] += np.array(image_data[i][0, :]) # first we fill the first row into every 4th element of the ERF (4x supersampled)
+        sl = image_data[i]
+        x_orig = np.arange(ncols) * pixel_size  # original pixel centres (mm)
 
-        for row in range(1, image_data[i].shape[0]):
-            # shift the row by the angle of the edge to align the edges
-            row_array = np.zeros((4*len(image_data[i][row, :])))
-            row_array[::4] += image_data[i][row, :]
+        # Accumulate aligned rows onto the oversampled grid
+        ERF_sum = np.zeros(n_erf)
+        ERF_count = np.zeros(n_erf)
+        for row in range(sl.shape[0]):
+            # Fractional shift for this row (mm)
+            if high_to_low:
+                dx = -row * shift_per_row * pixel_size
+            else:
+                dx = row * shift_per_row * pixel_size
+            # Shifted x-coordinates for this row
+            x_shifted = x_orig - dx
+            # Interpolate onto the common grid
+            f = interp1d(x_shifted, sl[row, :], kind='linear',
+                         bounds_error=False, fill_value=np.nan)
+            vals = f(x_erf_grid)
+            valid = ~np.isnan(vals)
+            ERF_sum[valid] += vals[valid]
+            ERF_count[valid] += 1
 
-            if high_to_low: # check if edge goes from high to low
-                ERF += np.roll(row_array, -int(row*np.tan(4*edge_angle*np.pi/180)))
-            else: # or low to high
-                ERF += np.roll(row_array, int(row*np.tan(4*edge_angle*np.pi/180)))
+        # Average
+        ERF_count[ERF_count == 0] = 1
+        ERF_4x = ERF_sum / ERF_count
 
-        # Normalise the ERF back to single image
-        ERF /= (image_data[i].shape[0]/4)
+        # Block-average from 4x back to 1x pixel spacing
+        n_out = len(ERF_4x) // subsample * subsample
+        ERF = ERF_4x[:n_out].reshape(-1, subsample).mean(axis=1)
 
-        # Crop the ERF to the region of interest (omit edge that has roll 'artefact')
-        if high_to_low: # check if edge goes from high to low
-            ERF = ERF[:-int((crop_indices[1]-crop_indices[0])*np.tan(4*edge_angle*np.pi/180))]
-        else: # or low to high
-            ERF = ERF[int((crop_indices[1]-crop_indices[0])*np.tan(4*edge_angle*np.pi/180)):]
-
-        # taken from https://stackoverflow.com/questions/30379311/fast-way-to-take-average-of-every-n-rows-in-a-npy-array
-        # this is to average the ERF over 4 pixels (otherwise too noisy)
-        ERF = np.cumsum(ERF, 0)[4-1::4]/float(4)
-        ERF[1:] = ERF[1:] - ERF[:-1]
-
-        # Apply Savitzky-Golay filter to smooth ERF before differentiation
-        # Window=11, polyorder=3 preserves edge shape while reducing noise
-        if len(ERF) >= 11:
-            ERF = savgol_filter(ERF, window_length=11, polyorder=3)
-
-        # calculate the Line Spread Function
-        LSF = np.abs(np.gradient(ERF, pixel_size, edge_order=1))
+        # Fit a smoothing spline to the ERF and differentiate analytically.
+        # This produces a noise-free LSF while preserving the true edge shape
+        # (including filter-induced ringing / sidelobes).
+        from scipy.interpolate import UnivariateSpline
+        x_erf_1x = np.arange(len(ERF)) * pixel_size
+        # Smoothing factor: n * noise_variance (estimate noise from flat plateaus)
+        q = max(len(ERF) // 4, 2)
+        noise_std = np.mean([np.std(ERF[:q]), np.std(ERF[-q:])])
+        s_val = len(ERF) * noise_std**2
+        try:
+            spline = UnivariateSpline(x_erf_1x, ERF, s=s_val, k=4)
+            LSF = spline.derivative()(x_erf_1x)
+        except:
+            # Fallback to numerical gradient if spline fails
+            LSF = np.gradient(ERF, pixel_size, edge_order=1)
 
         # process the LSF
         if process_LSF:
-            # change the LSF length if processing is required (since a lot is cut from the signal)
-            if i == 0:
-                LSF_x_axis_original = np.linspace(0, len(LSF)*pixel_size, len(LSF))
-                LSF_x_axis, LSF = LSF_processing.process_LSF(LSF_x_axis_original, LSF, pixel_size)
+            LSF_x_tmp = np.linspace(0, len(LSF)*pixel_size, len(LSF))
+            LSF_x_tmp, LSF = LSF_processing.process_LSF(LSF_x_tmp, LSF, pixel_size)
 
-                LSF_array = np.zeros((image_data.shape[0], len(LSF)))
-                MTF_array = np.zeros((image_data.shape[0], len(LSF)))
-            else:
-                # after the first iteration the array is constructed yet the new LSFs still may be a different length
-                # this is only a small difference because the arrays are often very similar in size
-                _, LSF = LSF_processing.process_LSF(np.linspace(0, len(LSF)*pixel_size, len(LSF)), LSF, pixel_size)
+        # Store per-slice results in lists (lengths may vary across slices)
+        _erf_list.append(ERF)
+        _lsf_list.append(LSF)
+        _lsf_x_list.append(LSF_x_tmp if process_LSF else np.linspace(0, len(LSF)*pixel_size, len(LSF)))
 
-                if LSF_array.shape[1] > len(LSF):
-                    # pad the LSF with zeros if new LSF is shorter
-                    LSF = np.pad(LSF, (int(np.floor(0.5*(LSF_array.shape[1]-len(LSF)))), int(np.ceil(0.5*(LSF_array.shape[1]-len(LSF))))))
-                elif LSF_array.shape[1] < len(LSF):
-                    # crop the zeroes of the LSF if new LSF is longer
-                    LSF = LSF[int(np.floor(0.5*(len(LSF)-LSF_array.shape[1]))):int(-np.ceil(0.5*(len(LSF)-LSF_array.shape[1])))]
+    # Determine the target length from the median processed LSF length.
+    # This prevents a single degenerate slice from collapsing the arrays.
+    lsf_lengths = [len(l) for l in _lsf_list]
+    target_len = int(np.median(lsf_lengths))
+    # Minimum sanity: at least 20 points
+    target_len = max(target_len, 20)
 
-            # apply a Hamming window to it (this was an old processing step instead of the one above (is done by ISO 12233 standards))
-            #LSF = LSF*np.hamming(len(LSF))**int(ERF.max()-ERF.min())
+    LSF_array = np.zeros((image_data.shape[0], target_len))
+    MTF_array = np.zeros((image_data.shape[0], target_len))
+    ERF_array = np.zeros((image_data.shape[0], array_1_length))
 
+    for i in range(image_data.shape[0]):
+        ERF_array[i] = _erf_list[i]
 
-        # calculate the Modulation Transfer Function
-        MTF = np.abs(np.fft.fftshift(np.fft.fft(LSF)))
-        # normalise the MTF
-        if normalize_MTF:
-            MTF = MTF/MTF.max()
+        lsf_i = _lsf_list[i]
+        # Pad or crop to target_len
+        if len(lsf_i) < target_len:
+            pad_l = (target_len - len(lsf_i)) // 2
+            pad_r = target_len - len(lsf_i) - pad_l
+            lsf_i = np.pad(lsf_i, (pad_l, pad_r))
+        elif len(lsf_i) > target_len:
+            crop_l = (len(lsf_i) - target_len) // 2
+            lsf_i = lsf_i[crop_l:crop_l + target_len]
 
-        # store the results
-        ERF_array[i] = ERF
-        LSF_array[i] = LSF
-        MTF_array[i] = MTF
+        LSF_array[i] = lsf_i
+
+        MTF_i = np.abs(np.fft.fftshift(np.fft.fft(lsf_i)))
+        if normalize_MTF and MTF_i.max() > 0:
+            MTF_i = MTF_i / MTF_i.max()
+        MTF_array[i] = MTF_i
 
     # Average the results
     ERF = np.mean(ERF_array, axis=0)
@@ -141,8 +181,7 @@ def get_MTF(image_data, crop_indices, find_absolute_MTF=True, pixel_size=0.05,
     MTF = np.mean(MTF_array, axis=0)
 
     if process_LSF:
-        # shift LSF x axis to align with highest average gradient (might not be same as from first slice)
-        LSF_x_axis += (LSF_x_axis_original[np.argmax(np.abs(np.gradient(ERF)))]-LSF_x_axis[np.argmax(LSF)])
+        LSF_x_axis = np.linspace(0, target_len * pixel_size, target_len)
 
     # calculate the frequency axis
     MTF_freq = np.fft.fftshift(np.fft.fftfreq(len(MTF), d=pixel_size))

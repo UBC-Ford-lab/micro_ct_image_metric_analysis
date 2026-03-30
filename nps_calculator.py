@@ -10,7 +10,7 @@ from photutils.profiles import RadialProfile
 # https://en.wikipedia.org/wiki/Spectral_density is useful to understand the concept of NPS
 # https://www.sciencedirect.com/science/article/pii/S1120179715003294 is a good academic paper to cross-check understanding
 
-def get_NPS(image_data, ROI_bounds, pixel_size, target_directory=os.getcwd(), plot_results=True, filter_low_freq=False):
+def get_NPS(image_data, ROI_bounds, pixel_size, target_directory=os.getcwd(), plot_results=True, filter_low_freq=False, roi_shape="square"):
     """
     This function calculates the Noise Power Spectrum (NPS) on image data.
     :param image_data: 3D numpy array containing the image data
@@ -19,6 +19,10 @@ def get_NPS(image_data, ROI_bounds, pixel_size, target_directory=os.getcwd(), pl
     :param target_directory: directory where the final NPS plot will be saved
     :param plot_results: Boolean to plot the results or not
     :param filter_low_freq: Boolean to filter the low frequency components of the FFT
+    :param roi_shape: "square" (default) or "circular". Controls masking and
+        normalization area. "square" normalizes by Nx*Ny (full ROI).
+        "circular" applies a circular mask (inscribed circle) before the FFT
+        and normalizes by pi*r^2.
     :return: NPS_freqs_transverse: 1D numpy array containing the transverse frequencies
     :return: NPS: 3D numpy array containing NPS values for each slice
     """
@@ -36,10 +40,23 @@ def get_NPS(image_data, ROI_bounds, pixel_size, target_directory=os.getcwd(), pl
             np.all(ROI_bounds[:, 3] - ROI_bounds[:, 2] == ROI_bounds[0, 3] - ROI_bounds[0, 2])):
         raise ValueError('All ROIs must be the same size')
 
-    # check that ROI x and y dimensions are even
+    # check that ROI x and y dimensions are equal (square)
     if not (np.all((ROI_bounds[:, 1] - ROI_bounds[:, 0]) == (ROI_bounds[:, 3] - ROI_bounds[:, 2]))):
-        raise ValueError('All ROIs must have even dimensions')
+        raise ValueError('All ROIs must have equal x and y dimensions')
 
+    Ny = int(ROI_bounds[0, 1] - ROI_bounds[0, 0])
+    Nx = int(ROI_bounds[0, 3] - ROI_bounds[0, 2])
+
+    if roi_shape == "circular":
+        # Circular mask: inscribed circle within the square ROI
+        cy, cx = Ny / 2.0, Nx / 2.0
+        yy, xx = np.ogrid[:Ny, :Nx]
+        r = min(Ny, Nx) / 2.0
+        circular_mask = ((yy - cy) ** 2 + (xx - cx) ** 2) <= r ** 2
+        norm_area = np.pi * r ** 2
+    else:
+        circular_mask = None
+        norm_area = Ny * Nx
 
     # create an array of the cropped ROI regions
     ROI_array = np.empty((len(ROI_bounds), image_data.shape[0], ROI_bounds[0, 1] - ROI_bounds[0, 0], ROI_bounds[0, 3] - ROI_bounds[0, 2]))
@@ -62,7 +79,10 @@ def get_NPS(image_data, ROI_bounds, pixel_size, target_directory=os.getcwd(), pl
             ROI_background = np.mean(ROI_array[i][j])+(ROI_Y[:, np.newaxis] + ROI_X[np.newaxis, :])/2
 
             # calculate the 2d fft of the ROI and subtract the background
-            fft = np.fft.fftshift(np.fft.fft2(ROI_array[i][j]-ROI_background))
+            detrended = ROI_array[i][j] - ROI_background
+            if circular_mask is not None:
+                detrended = detrended * circular_mask
+            fft = np.fft.fftshift(np.fft.fft2(detrended))
             # filter the fft to remove the low frequency components (filters 1% of the lowest freq component radially)
             if filter_low_freq:
                 fft[(np.sqrt((np.ogrid[:fft.shape[0], :fft.shape[1]][1] - int(fft.shape[0] / 2))**2
@@ -73,8 +93,7 @@ def get_NPS(image_data, ROI_bounds, pixel_size, target_directory=os.getcwd(), pl
 
 
     # Calculate the NPS from the ROI_ffts by averaging over ROIs and correcting for spatial units
-    NPS = ((np.power(pixel_size, 2)*np.sum(ROI_ffts, axis=0)/
-            (np.pi*((ROI_bounds[0, 3] - ROI_bounds[0, 2])/2)**2 *ROI_ffts.shape[0])))
+    NPS = (pixel_size ** 2 * np.sum(ROI_ffts, axis=0) / (norm_area * ROI_ffts.shape[0]))
 
 
     # Calculate the radial average of the NPS in the transverse plane
@@ -109,12 +128,20 @@ def get_NPS(image_data, ROI_bounds, pixel_size, target_directory=os.getcwd(), pl
         axs[0, 0].set_xlabel('X (mm)')
         axs[0, 0].set_ylabel('Y (mm)')
         fig.colorbar(image, ax=axs[0, 0], label='HU')
-        # create circular boxes (ROIs) over which the NPS was calculated
+        # create ROI overlays matching the roi_shape used for computation
         for i in range(len(ROI_bounds)):
-            axs[0, 0].add_patch(plt.Circle((int((0.5*ROI_bounds[i][2]+0.5*ROI_bounds[i][3])*pixel_size),
-                                            int((0.5*ROI_bounds[i][1]+0.5*ROI_bounds[i][0])*pixel_size)),
-                                            0.5*(ROI_bounds[i][3]-ROI_bounds[i][2])*pixel_size, edgecolor='r',
-                                            facecolor='none'))
+            if roi_shape == "circular":
+                axs[0, 0].add_patch(plt.Circle((int((0.5*ROI_bounds[i][2]+0.5*ROI_bounds[i][3])*pixel_size),
+                                                int((0.5*ROI_bounds[i][1]+0.5*ROI_bounds[i][0])*pixel_size)),
+                                                0.5*(ROI_bounds[i][3]-ROI_bounds[i][2])*pixel_size, edgecolor='r',
+                                                facecolor='none'))
+            else:
+                x0 = ROI_bounds[i][2] * pixel_size
+                y0 = ROI_bounds[i][0] * pixel_size
+                w = (ROI_bounds[i][3] - ROI_bounds[i][2]) * pixel_size
+                h = (ROI_bounds[i][1] - ROI_bounds[i][0]) * pixel_size
+                axs[0, 0].add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='r',
+                                                   facecolor='none'))
 
 
         # plot the transverse plane of the NPS averaged over all slices
