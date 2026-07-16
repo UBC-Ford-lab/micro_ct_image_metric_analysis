@@ -160,8 +160,9 @@ def get_d_prime_npw(mtf_freq, mtf, nps_freq, nps,
 
 
 def _plot_d_prime_npw(freq, mtf, nps, task_functions,
-                      diameters, d_prime, contrast_hu, target_directory):
-    """Save diagnostic plot for NPW d' calculation."""
+                      diameters, d_prime, contrast_hu, target_directory,
+                      observer_label='NPW', plot_filename='Detectability_NPW_plot.png'):
+    """Save diagnostic plot for NPW/NPWE d' calculation."""
     fig, axes = plt.subplots(1, 3, figsize=(16, 5))
 
     # (a) Task functions
@@ -213,16 +214,195 @@ def _plot_d_prime_npw(freq, mtf, nps, task_functions,
     ax.set_xticklabels([f'{d:.2f}' for d in diameters], fontsize=8)
     ax.set_xlabel('Disc diameter (mm)')
     ax.set_ylabel("Detectability index d'")
-    ax.set_title(f"(c) NPW d' (ΔC = {contrast_hu:.0f} HU)",
+    ax.set_title(f"(c) {observer_label} d' (ΔC = {contrast_hu:.0f} HU)",
                  fontweight='bold')
     ax.set_ylim(bottom=0)
     ax.grid(True, alpha=0.3, axis='y')
 
     plt.tight_layout()
-    path = os.path.join(target_directory, 'Detectability_NPW_plot.png')
+    path = os.path.join(target_directory, plot_filename)
     fig.savefig(path, dpi=300, bbox_inches='tight')
     plt.close(fig)
-    print(f"  NPW d' plot saved to: {path}")
+    print(f"  {observer_label} d' plot saved to: {path}")
+
+
+# =============================================================================
+# NPWE observer: NPW matched filter + a human contrast-sensitivity ("eye")
+# filter. get_d_prime_npw above (E(f) implicitly = 1) remains the project
+# default everywhere else -- this is an explicit alternative for comparing
+# how rankings shift under a human-visual-system weighting.
+#
+# IMPORTANT -- E(f) exponent asymmetry (verified against literature, see
+# below): the eye filter enters the numerator as E^2 but the denominator as
+# E^4, NOT E^2/E^2. This is because the observer's template is matched to
+# the eye-filtered signal (w = W*MTF*E, giving E^2 in the signal term), but
+# the *noise* is independently filtered by E before reaching that template
+# (its power spectrum scales by E^2), and the matched-filter variance is
+# |template|^2 * (filtered NPS) = E^2 * (E^2 * NPS) = E^4 * NPS. Using
+# E^2/E^2 throughout (as an earlier version of this function did) is the
+# *prewhitening*-eye (PWE) convention, not NPWE -- see Gang et al., "The
+# Generalized NEQ and Detectability Index for Tomosynthesis and Cone-Beam
+# CT," PMC3845534, Eq. (8)-(9), which states this exact E^2-num/E^4-denom
+# split for NPWE vs. E^2/E^2 for PWE.
+#
+# Burgess-style bandpass eye filter E(f) = f^n * exp(-(f/f_c)^2). n=1.3 and
+# a peak at ~4 cycles/deg (50 cm viewing distance) are directly confirmed
+# from Gang et al. above (their Eq. 9, citing Burgess, Li & Abbey, "Visual
+# Signal Detectability With Two Noise Components," J. Opt. Soc. Am. A
+# 14(9):2420-2442, 1997, which extends the original Burgess 1994 eye-filter
+# model). f_c below is *derived* from that peak (f_peak = f_c*sqrt(n/2) for
+# this f^n*exp(-(f/f_c)^2) form) rather than taken as a literature f_c
+# value directly, since sources disagree on whether f_c denotes the peak
+# location or an internal rolloff constant -- if exact reproduction of a
+# specific paper's f_c is needed, verify against that paper directly.
+DEFAULT_EYE_FILTER_N = 1.3
+DEFAULT_EYE_FILTER_PEAK_CY_PER_DEG = 4.0
+DEFAULT_EYE_FILTER_FC_CY_PER_DEG = (
+    DEFAULT_EYE_FILTER_PEAK_CY_PER_DEG / np.sqrt(DEFAULT_EYE_FILTER_N / 2.0)
+)
+
+# There is no established clinical viewing protocol for this micro-CT
+# phantom data (unlike a diagnostic radiology monitor/reading-distance
+# setup), so these are configurable *modeling assumptions*, not measured
+# values. Defaults: a generic reading distance (50 cm) at 1x magnification
+# (displayed pixel size == object pixel size).
+DEFAULT_VIEWING_DISTANCE_MM = 500.0
+DEFAULT_MAGNIFICATION = 1.0
+
+
+def eye_filter(f_mm, n=DEFAULT_EYE_FILTER_N,
+               f_c_cy_per_deg=DEFAULT_EYE_FILTER_FC_CY_PER_DEG,
+               viewing_distance_mm=DEFAULT_VIEWING_DISTANCE_MM,
+               magnification=DEFAULT_MAGNIFICATION):
+    """Human contrast-sensitivity ("eye") filter E(f), Burgess-style bandpass.
+
+        E(f) = f_deg^n * exp(-(f_deg / f_c)^2)
+
+    f_mm (object-space spatial frequency, cycles/mm) is converted to visual
+    angle frequency f_deg (cycles/degree) assuming the image is viewed from
+    `viewing_distance_mm` at `magnification` (displayed size / object
+    size), via the small-angle approximation
+    f_deg = f_mm * magnification * viewing_distance_mm * tan(1 deg).
+
+    Args:
+        f_mm: 1D array of spatial frequencies (mm^-1).
+        n: Eye-filter frequency exponent (default 1.3).
+        f_c_cy_per_deg: Eye-filter rolloff frequency in cy/deg (default 12.0).
+        viewing_distance_mm: Assumed viewing distance (default 500 mm).
+        magnification: Displayed size / object size (default 1.0).
+
+    Returns:
+        E: 1D array, same shape as f_mm.
+    """
+    f_mm = np.asarray(f_mm, dtype=np.float64)
+    deg_per_mm = magnification * viewing_distance_mm * np.tan(np.pi / 180.0)
+    f_deg = f_mm * deg_per_mm
+    with np.errstate(over='ignore'):
+        E = f_deg ** n * np.exp(-(f_deg / f_c_cy_per_deg) ** 2)
+    return E
+
+
+def get_d_prime_npwe(mtf_freq, mtf, nps_freq, nps,
+                     disc_diameters_mm=None, contrast_hu=None,
+                     normalize_mtf=True, n_freq=500,
+                     eye_filter_n=DEFAULT_EYE_FILTER_N,
+                     eye_filter_fc_cy_per_deg=DEFAULT_EYE_FILTER_FC_CY_PER_DEG,
+                     viewing_distance_mm=DEFAULT_VIEWING_DISTANCE_MM,
+                     magnification=DEFAULT_MAGNIFICATION,
+                     plot_results=True, target_directory=None):
+    """Compute NPWE-observer (non-prewhitening + eye filter) detectability index.
+
+    Same NPW matched-filter structure as get_d_prime_npw, with the human
+    eye filter E(f) (see eye_filter()) applied to the template. E(f)
+    enters the numerator squared but the denominator to the 4th power --
+    see the module-level comment above eye_filter() for the derivation and
+    literature citation (this asymmetry, not E^2/E^2, is the NPWE
+    convention; E^2/E^2 throughout is the distinct PWE convention):
+
+        d'^2 = [ integral  |W(f)|^2 MTF(f)^2 E(f)^2 f df ]^2
+               / integral  |W(f)|^2 MTF(f)^2 E(f)^4 NPS(f) f df
+
+    Also note: this integral runs over radial frequency with an explicit
+    f df term, i.e. the 2D frequency integral already collapsed to polar
+    coordinates (f df = the polar-coordinates Jacobian, with the constant
+    angular factor folded into the overall scale) under the assumption
+    that W, MTF, NPS, and E are all radially symmetric. `f_max` /
+    `freq[-1]` is therefore the *radial* (isotropic) Nyquist frequency,
+    not the axial (row/column) Nyquist.
+
+    get_d_prime_npw (equivalent to E(f) = 1 everywhere) remains the default
+    detectability metric used elsewhere in this project; this function is
+    an explicit alternative for comparing rankings under a human-visual-
+    system-weighted observer. See eye_filter() docstring for the viewing
+    distance / magnification assumptions this relies on.
+
+    Args/Returns: identical to get_d_prime_npw, plus the eye_filter_n,
+    eye_filter_fc_cy_per_deg, viewing_distance_mm, magnification knobs
+    above, and an added 'eye_filter' key in the returned dict (E(f) on
+    the same 'freq' grid).
+    """
+    if disc_diameters_mm is None:
+        disc_diameters_mm = list(DEFAULT_DISC_DIAMETERS)
+    if contrast_hu is None:
+        contrast_hu = DEFAULT_CONTRAST_HU
+    if target_directory is None:
+        target_directory = os.getcwd()
+
+    disc_diameters_mm = np.asarray(disc_diameters_mm, dtype=np.float64)
+
+    pos_mtf = mtf_freq >= 0
+    f_max = min(mtf_freq[pos_mtf].max(), nps_freq.max())
+    freq = np.linspace(0, f_max, n_freq)
+
+    mtf_interp = interp1d(mtf_freq[pos_mtf], mtf[pos_mtf],
+                          bounds_error=False, fill_value=0.0)(freq)
+    nps_interp = interp1d(nps_freq, nps,
+                          bounds_error=False, fill_value='extrapolate')(freq)
+
+    if normalize_mtf:
+        mtf_max = mtf_interp.max()
+        if mtf_max > 0:
+            mtf_interp = mtf_interp / mtf_max
+
+    nps_interp = np.maximum(nps_interp, np.max(nps_interp) * 1e-12)
+
+    E = eye_filter(freq, n=eye_filter_n, f_c_cy_per_deg=eye_filter_fc_cy_per_deg,
+                   viewing_distance_mm=viewing_distance_mm, magnification=magnification)
+
+    d_prime_values = np.empty(len(disc_diameters_mm))
+    task_functions = {}
+
+    for i, diam in enumerate(disc_diameters_mm):
+        R = diam / 2.0
+        W = disc_task_function(freq, R, contrast_hu)
+        task_functions[diam] = W
+
+        integrand_num = np.abs(W) ** 2 * mtf_interp ** 2 * E ** 2 * freq
+        integrand_den = np.abs(W) ** 2 * mtf_interp ** 2 * E ** 4 * nps_interp * freq
+
+        numerator = scipy.integrate.simpson(integrand_num, x=freq)
+        denominator = scipy.integrate.simpson(integrand_den, x=freq)
+
+        if denominator > 0 and numerator > 0:
+            d_prime_values[i] = numerator / np.sqrt(denominator)
+        else:
+            d_prime_values[i] = 0.0
+
+    if plot_results:
+        _plot_d_prime_npw(freq, mtf_interp, nps_interp, task_functions,
+                          disc_diameters_mm, d_prime_values, contrast_hu,
+                          target_directory, observer_label='NPWE',
+                          plot_filename='Detectability_NPWE_plot.png')
+
+    return {
+        'disc_diameters_mm': disc_diameters_mm,
+        'contrast_hu': contrast_hu,
+        'd_prime': d_prime_values,
+        'freq': freq,
+        'task_functions': task_functions,
+        'eye_filter': E,
+    }
+
 
 def get_d_prime(image_data_TTF, centre_pixels_TTF, radius_TTF, materials_TTF, image_data_NPS, ROI_bounds_NPS,
                 task_function_data, task_function_material, task_function_object_size, pixel_size=0.05,
