@@ -92,57 +92,29 @@ def write_vff(filename, header, data, verbose=True):
     """
     Write a VFF file from a header dict and 2D/3D NumPy array.
 
+    Delegates to `reconstruction.ct_core.vff_io.write_vff`, which is the single
+    writer for the project. This function USED to emit a minimal
+    `size/bits/format/endian` header; GE / Amalytics rejects those files
+    ("ncaa is missing"), which is what scripts/fix_vff_header.py existed to
+    repair after the fact. Delegating means there is no longer any writer in
+    the tree that can produce an unloadable file.
+
     :param filename: Path to output .vff file
     :param header: Dict with metadata keys (e.g., 'bits'); size is inferred from `data`
     :param data: 3D NumPy array shaped (z, y, x) or 2D array (y, x)
     """
-    # Convert input to NumPy array and ensure 3D shape
-    arr = np.array(data, copy=False)
-    if arr.ndim == 2:
-        arr = arr[np.newaxis, ...]
-    if arr.ndim != 3:
-        raise ValueError(f"Data must be 2D or 3D array, got {arr.ndim}D")
-    zdim, ydim, xdim = arr.shape
+    # Import lazily and path-tolerantly: this module is imported both as
+    # `metric_calculators.helper_scripts.vff_io` (package context) and as a
+    # bare `vff_io` after its directory is put on sys.path (see
+    # inr_pipeline/fdk_reference.py, ct_core/tiff_converter.py), so a package-
+    # relative import would fail in the latter case.
+    import sys
+    _root = Path(__file__).resolve().parents[2]
+    if str(_root) not in sys.path:
+        sys.path.insert(0, str(_root))
+    from reconstruction.ct_core.vff_io import write_vff as _write_vff
 
-    # Build header entirely from inferred dimensions and provided bits
-    bits = int(header.get('bits', 16))
-    dtype = np.dtype('>u1') if bits == 8 else np.dtype('>i2') if bits == 16 else None
-    if dtype is None:
-        raise ValueError("Unsupported bits per voxel: must be 8 or 16")
-
-    # Assemble canonical header fields
-    hdr = header.copy()
-    hdr['size'] = [xdim, ydim, zdim]
-    hdr['bits'] = bits
-    hdr.setdefault('format', 'unsigned-byte' if bits == 8 else 'signed-short')
-    hdr.setdefault('endian', 'big')
-
-    # Build header text
-    lines = []
-    for key in ('size', 'bits', 'format', 'endian'):
-        val = hdr[key]
-        if key == 'size':
-            val = ' '.join(map(str, val))
-        lines.append(f"{key} = {val};")
-    for key, val in hdr.items():
-        if key in ('size', 'bits', 'format', 'endian'):
-            continue
-        lines.append(f"{key} = {val};")
-    header_text = "\n".join(lines) + "\n\f\n"
-
-    # Ensure big-endian C-contiguous data
-    if arr.dtype != dtype or arr.dtype.byteorder != '>' or not arr.flags['C_CONTIGUOUS']:
-        arr_be = arr.astype(dtype)
-    else:
-        arr_be = arr
-
-    if verbose:
-        print(f"Writing VFF to {filename}: shape={arr_be.shape}, dtype={arr_be.dtype}")
-
-    with open(filename, 'wb') as f:
-        f.write(header_text.encode('latin-1'))
-
-        arr_be.tofile(f)
+    return _write_vff(filename, header, data, verbose=verbose)
 
 
 class VFFDataset:
