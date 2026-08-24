@@ -8,8 +8,49 @@ from scipy.interpolate import interp1d
 from . import nps_calculator as NPS_calculator
 from . import mtf_calculator as MTF_calculator
 
+def neq_from_curves(mtf_freq, mtf, nps_freq, nps, n_freq=100, signal=None):
+    """NEQ from an MTF and an NPS that have ALREADY been measured.
+
+    ``get_NEQ`` measures both itself, which means a caller who has already run
+    ``get_MTF`` and ``get_NPS`` — to report them in the same table — pays for
+    them twice AND can end up with an NEQ built from a different MTF than the
+    one it published, because ``get_NEQ`` used to fix ``edge_angle`` at 5.5
+    regardless of what the caller passed elsewhere. Working from the curves
+    removes both problems.
+
+    Only the OVERLAP of the two frequency axes is used. They are not the same
+    axis in general — ``get_TTF``/``get_MTF`` and ``get_NPS`` reach different
+    Nyquists — and extrapolating either one past its own limit invents the
+    part of the curve that decides the answer.
+
+    ``signal`` is the large-area signal level the classical definition
+    multiplies by. Leave it None for the ratio MTF^2/NPS, which is what ranks
+    two reconstructions of the SAME object: the factor is common to them and
+    on an HU volume it is an arbitrary constant that depends on how much air
+    the measurement region happened to contain.
+
+    Returns ``(freqs, NEQ)``.
+    """
+    mf = np.asarray(mtf_freq, dtype=np.float64)
+    mv = np.asarray(mtf, dtype=np.float64)
+    nf = np.asarray(nps_freq, dtype=np.float64)
+    nv = np.asarray(nps, dtype=np.float64)
+    lo = max(float(np.min(np.abs(mf))), float(np.min(np.abs(nf))))
+    hi = min(float(np.max(mf)), float(np.max(nf)))
+    if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+        return np.array([]), np.array([])
+    freqs = np.linspace(lo, hi, int(n_freq))
+    mtf_i = interp1d(mf, mv, bounds_error=False, fill_value='extrapolate')(freqs)
+    nps_i = interp1d(nf, nv, bounds_error=False, fill_value='extrapolate')(freqs)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        neq = np.where(nps_i > 0, mtf_i ** 2 / nps_i, np.nan)
+    if signal is not None:
+        neq = neq * float(signal) ** 2
+    return freqs, neq
+
+
 def get_NEQ(image_data_MTF, image_data_NPS, crop_indices_MTF, ROI_bounds_NPS, pixel_size, target_directory=os.getcwd(),
-            plot_results=True, high_to_low_MTF=True):
+            plot_results=True, high_to_low_MTF=True, edge_angle=5.5):
     """
     This function calculates the Noise-Equivalent Quanta (NEQ) on image data. It uses the MTF and NPS functions from
     the MTF_calculator and NPS_calculator scripts respectively.
@@ -21,12 +62,20 @@ def get_NEQ(image_data_MTF, image_data_NPS, crop_indices_MTF, ROI_bounds_NPS, pi
     :param target_directory: Where to save the resulting plot
     :param plot_results: Whether to plot the results
     :param high_to_low_MTF: Whether the MTF edge goes from high to low pixel values (True) or low to high pixel values (False)
+    :param edge_angle: The angle of the MTF edge in degrees. Must match what
+        you pass to get_MTF, or the NEQ is built on a different MTF than the
+        one you reported.
     :return: freqs: The frequency axis of the NEQ, NEQ: The Noise-Equivalent Quanta from interp1d interpolation of the MTF and NPS
     """
 
     # Calculate the MTF
+    #
+    # edge_angle is a PARAMETER now. It used to be pinned at 5.5 degrees here
+    # while get_MTF took it from the caller, so an NEQ computed on a phantom
+    # whose edge is at some other angle silently disagreed with the MTF the
+    # same caller had just measured.
     MTF_freq, MTF = MTF_calculator.get_MTF(image_data_MTF, crop_indices_MTF, find_absolute_MTF=True, pixel_size=pixel_size,
-      target_directory=target_directory, plot_results=False, edge_angle=5.5, high_to_low=high_to_low_MTF)
+      target_directory=target_directory, plot_results=False, edge_angle=edge_angle, high_to_low=high_to_low_MTF)
 
     freqs = np.linspace(np.sort(np.abs(MTF_freq))[0], MTF_freq[-1], 100) # freqs up to Nyquist frequency
 
@@ -103,6 +152,9 @@ def parse_args():
     parser.add_argument('--slices_nps', type=str, default=None, help='Slice selection for NPS data')
     parser.add_argument('--pixel_size', type=float, required=True, help='Pixel size in mm')
     parser.add_argument('--low_to_high', action='store_true', help='MTF edge goes from low to high intensity')
+    parser.add_argument('--edge_angle', type=float, default=5.5,
+                        help='Angle of the MTF edge in degrees (default: 5.5). '
+                             'Must match what you pass to ct-mtf.')
     parser.add_argument('--output_dir', type=str, default='./results', help='Output directory (default: ./results)')
     parser.add_argument('--no_plot', action='store_true', help='Disable plot generation')
     parser.add_argument('--show', action='store_true', help='Display plots interactively')
@@ -125,7 +177,8 @@ def main():
 
     _ = get_NEQ(image_data_MTF, image_data_NPS, args.crop_indices, args.roi_bounds,
                 pixel_size=args.pixel_size, target_directory=output_dir,
-                plot_results=not args.no_plot, high_to_low_MTF=not args.low_to_high)
+                plot_results=not args.no_plot, high_to_low_MTF=not args.low_to_high,
+                edge_angle=args.edge_angle)
 
     if args.show:
         import matplotlib.pyplot as plt

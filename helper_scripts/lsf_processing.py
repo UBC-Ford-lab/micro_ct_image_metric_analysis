@@ -8,6 +8,14 @@ from scipy.optimize import curve_fit
 
 
 def process_LSF(LSF_x_axis, LSF, pixel_size):
+    """Detrend, window and crop a line spread function.
+
+    `pixel_size` is used only as a PRIOR on the physical blur width (it sets
+    the starting point and the bounds of the Gaussian fit). The window widths
+    are measured in array samples, and that spacing is taken from
+    `LSF_x_axis`, which is the only thing that knows it -- callers supersample
+    by different factors.
+    """
     # The Gaussian shape fitting function
     def primary_fit_func(x, mu, sigma, A):
         return A * np.exp(- (x - mu)**2 / (2 * sigma**2))
@@ -42,7 +50,28 @@ def process_LSF(LSF_x_axis, LSF, pixel_size):
 
     fh_lsf = lambda x: primary_fit_func(x, *params)
     cen = max(np.argmax(fh_lsf(LSF_x_axis)), 1)
-    fwhm = 2.355 * params[1] / pixel_size # FWHM since we know sigma from the fit
+    # FWHM in ARRAY SAMPLES, which is what calcRg_scaleFwhm indexes with.
+    #
+    # This used to divide by pixel_size, i.e. it expressed the width in PIXELS
+    # and then used that as a number of samples. The two are the same only when
+    # the LSF is sampled once per pixel, which is true for get_MTF (it block-
+    # averages its 4x ERF back down first) and false for get_TTF (its radial
+    # ERF stays at 1/4-pixel spacing). On the TTF path the window therefore
+    # came out 4x too narrow and clipped the LSF tails, which NARROWS the LSF
+    # and so RAISES the transfer function it produces.
+    #
+    # MEASURED 2026-08-24 on a synthetic disc with a 0.30 mm Gaussian blur
+    # (true TTF50 1.471 lp/mm): process_LSF=True gave 1.743 (+18%) and
+    # process_LSF=False gave 1.437 (-2%). Taking the spacing from the axis
+    # itself makes the two agree and is correct for either caller by
+    # construction.
+    if np.size(LSF_x_axis) > 1:
+        sample_spacing = float(np.median(np.diff(np.asarray(LSF_x_axis))))
+    else:
+        sample_spacing = float(pixel_size)
+    if not np.isfinite(sample_spacing) or sample_spacing <= 0:
+        sample_spacing = float(pixel_size)
+    fwhm = 2.355 * params[1] / sample_spacing # FWHM since we know sigma from the fit
     # Ensure 6×FWHM window is at least 20 pixels to avoid over-cropping
     fwhm = max(fwhm, 20 / 6)
     # determine region of interest based on primarySca

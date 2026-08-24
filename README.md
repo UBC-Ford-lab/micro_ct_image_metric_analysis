@@ -177,6 +177,7 @@ ct-neq --input_mtf mtf_volume.npy \
 | `--slices_mtf` | No | Slice selection for MTF data |
 | `--slices_nps` | No | Slice selection for NPS data |
 | `--low_to_high` | No | MTF edge goes from low to high |
+| `--edge_angle` | No | MTF edge angle in degrees (default: 5.5). **Must match what you pass to `ct-mtf`**, or the NEQ is built on a different MTF than the one you reported. |
 | `--output_dir` | No | Output directory (default: ./results) |
 | `--no_plot` | No | Disable plot generation |
 | `--show` | No | Display plots interactively |
@@ -345,9 +346,22 @@ neq_freq, neq = neq_calculator.get_NEQ(
     ROI_bounds_NPS,
     pixel_size=0.085,
     plot_results=True,
-    target_directory='results/'
+    target_directory='results/',
+    edge_angle=5.5,       # must match the angle you gave get_MTF
 )
 ```
+
+If you have already measured the MTF and the NPS -- to report them in the same
+table -- build the NEQ from those curves instead. `get_NEQ` measures both
+itself, so calling it as well costs a second measurement AND can hand you an
+NEQ built on a different MTF than the one you published:
+
+```python
+neq_freq, neq = neq_calculator.neq_from_curves(mtf_freq, mtf, nps_freq, nps)
+```
+
+Only the overlap of the two frequency axes is used; neither curve is
+extrapolated past its own Nyquist.
 
 #### TTF (Task Transfer Function)
 
@@ -448,6 +462,33 @@ python -m metric_calculators.helper_scripts.plot_reconstruction_comparison \
     --slice_idx 150 \
     --output_dir ./figures
 ```
+
+## Conventions worth knowing
+
+**The returned frequency axis is two-sided.** `get_MTF` and `get_TTF` both
+return `fftshift(fftfreq(...))`, which runs from -Nyquist to +Nyquist with DC
+in the middle. `freq[0]` is therefore NOT zero frequency, and normalising a
+curve by `curve[0]` or reading a crossing off it from the start of the array
+gives a number from the negative half. Take `freq >= 0` first.
+
+**The two reach different Nyquists.** `get_MTF` block-averages its 4x
+oversampled ESF back to pixel spacing before the transform, so its axis stops
+at the pixel Nyquist `1/(2*pixel_size)`. `get_TTF` keeps its radial profile at
+`sampling_pixel_increment` (1/4) of a pixel, so its axis reaches four times
+further. The VALUES are comparable; the extents are not. The block average
+also costs the MTF about 2% at a typical MTF50 (it is a 1-pixel boxcar applied
+on top of the sampling that already happened) in exchange for lower noise.
+
+**`edge_angle` may be negative.** The sign says which way the edge leans and is
+handled. What matters is the magnitude: below roughly 1.5 degrees the edge does
+not cross a whole pixel over the ROI height and the projected-bin method has
+nothing to supersample.
+
+**Regions are pixel indices.** `crop_indices`, `roi_bounds`, `centre_pixels`,
+`radius` and `slices` are all in pixels on the grid of the volume you passed.
+Comparing reconstructions on different grids means converting a region
+specified once in millimetres, per volume -- the indices themselves are not
+portable.
 
 ## Requirements
 

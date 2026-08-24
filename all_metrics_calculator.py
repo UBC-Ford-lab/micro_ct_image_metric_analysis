@@ -49,7 +49,9 @@ def run_all_metrics(config):
     # Calculate the NEQ
     print("Calculating the NEQ")
     _ = NEQ_calculator.get_NEQ(image_data_MTF, image_data_NPS, crop_indices_MTF, ROI_bounds_NPS, pixel_size=pixel_size,
-                               target_directory=target_directory, plot_results=True)
+                               target_directory=target_directory, plot_results=True,
+                               edge_angle=mtf_cfg.get('edge_angle', 5.5),
+                               high_to_low_MTF=mtf_cfg.get('high_to_low', True))
 
     # Calculate the TTF
     print("Calculating the TTF")

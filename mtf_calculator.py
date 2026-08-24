@@ -18,15 +18,36 @@ def get_MTF(image_data, crop_indices, find_absolute_MTF=True, pixel_size=0.05,
                         (Note: you need to set the pixel size manually!)
     :param target_directory: Where to save the cropped image (if desired)
     :param plot_results: Boolean to plot the results or not
-    :param edge_angle: The angle of the edge in degrees (default is 5 degrees)
+    :param edge_angle: The angle of the edge in degrees (default is 5 degrees).
+                       May be negative: the sign says which way the edge leans
+                       and is handled. What matters is the MAGNITUDE -- below
+                       about 1.5 degrees the edge does not cross a whole pixel
+                       over the ROI height and the projected-bin method has
+                       nothing to supersample.
     :param high_to_low: Boolean to check if the edge goes from high to low (True) or low to high (False)
     :param process_LSF: Boolean to process the LSF or not (i.e Detrending, windowing and centering)
     :param normalize_MTF: Boolean to normalize the MTF by its maximum value (default is True)
-    :return: MTF_freq: The frequency axis of the MTF, MTF: The Modulation Transfer Function
+    :return: MTF_freq: The frequency axis of the MTF, in mm^-1. TWO-SIDED and
+                       fftshifted, i.e. it runs from -Nyquist to +Nyquist with
+                       DC in the middle -- MTF_freq[0] is NOT zero frequency.
+                       Take MTF_freq >= 0 before normalising or before reading
+                       a crossing off the curve.
+                       Nyquist here is the PIXEL Nyquist (1 / (2 * pixel_size)),
+                       because the 4x oversampled ERF is block-averaged back to
+                       pixel spacing before the transform. get_TTF does not do
+                       that, so its axis reaches further; the two are directly
+                       comparable in value but not in extent.
+    :return: MTF: The Modulation Transfer Function
     """
     # Check if the LSF processing is required
     if process_LSF:
         from .helper_scripts import lsf_processing as LSF_processing
+
+    # Work on a COPY. This function reshapes and pads crop_indices, and it used
+    # to do so in place on the caller's list — so all_metrics_calculator, which
+    # passes the same list to get_MTF and then to get_NEQ, had the second call
+    # pad an already-padded crop.
+    crop_indices = [int(v) for v in crop_indices]
 
     # ROI width is taken as half the ROI height (this is ambiguous and changes the MTF shape)
     if crop_indices[1]-crop_indices[0] != 2*(crop_indices[3]-crop_indices[2]):
@@ -39,13 +60,27 @@ def get_MTF(image_data, crop_indices, find_absolute_MTF=True, pixel_size=0.05,
     if find_absolute_MTF==False:
         pixel_size = 1
 
-    # adding padding to the crop indices due to np.roll later which creates problems at the edges
-    crop_indices[2] -= int(1.05*(crop_indices[1]-crop_indices[0])*np.tan(edge_angle*np.pi/180))
-    crop_indices[3] += int(1.05*(crop_indices[1]-crop_indices[0])*np.tan(edge_angle*np.pi/180))
-
     # if only one image 2d data is provided, convert it to 3d
     if len(image_data.shape) == 2:
         image_data = image_data[np.newaxis, :, :]
+
+    # Widen the crop sideways to make room for the edge's travel across the ROI.
+    #
+    # abs(): the padding is a WIDTH, so it has to grow the crop whichever way
+    # the edge leans. With the signed tangent a NEGATIVE edge_angle made both
+    # lines shrink the crop by the travel instead of growing it, removing the
+    # very columns the row alignment below then needed.
+    travel_px = int(np.ceil(1.05 * abs(crop_indices[1]-crop_indices[0])
+                            * abs(np.tan(np.radians(edge_angle)))))
+    crop_indices[0] = max(0, crop_indices[0])
+    crop_indices[1] = min(image_data.shape[1], crop_indices[1])
+    crop_indices[2] = max(0, crop_indices[2] - travel_px)
+    crop_indices[3] = min(image_data.shape[2], crop_indices[3] + travel_px)
+    if crop_indices[1]-crop_indices[0] < 4 or crop_indices[3]-crop_indices[2] < 8:
+        raise ValueError(
+            f"the MTF crop {crop_indices} does not fit inside a "
+            f"{image_data.shape[1]}x{image_data.shape[2]} image with room for "
+            f"an edge slanted at {edge_angle} degrees")
 
     # now the image_data is cropped
     image_data = image_data[:, crop_indices[0]:crop_indices[1], crop_indices[2]:crop_indices[3]].astype(np.float64)
@@ -59,18 +94,32 @@ def get_MTF(image_data, crop_indices, find_absolute_MTF=True, pixel_size=0.05,
     # approach.
     from scipy.interpolate import interp1d
 
-    nrows = crop_indices[1] - crop_indices[0]
+    nrows = image_data.shape[1]
     ncols = image_data.shape[2]
-    shift_per_row = np.tan(np.radians(edge_angle))  # pixels per row
-    total_shift = nrows * shift_per_row              # total edge travel in pixels
+    shift_per_row = np.tan(np.radians(edge_angle))  # pixels per row, SIGNED
+    # The step actually applied to the rows below. `high_to_low` flips the
+    # direction, so this — not shift_per_row — is what the geometry depends on.
+    step_per_row = -shift_per_row if high_to_low else shift_per_row
+    travel = abs(step_per_row) * (nrows - 1)   # pixels the edge moves across the ROI
 
     # 4x oversampled output grid: covers the region common to all shifted rows
     subsample = 4
     erf_pixel_size = pixel_size / subsample
     # Usable range after accounting for the shift across all rows
-    usable_cols = ncols - int(np.ceil(total_shift)) - 1
+    usable_cols = ncols - int(np.ceil(travel)) - 1
+    if usable_cols < 8:
+        raise ValueError(
+            f"an edge slanted at {edge_angle} degrees travels {travel:.1f} "
+            f"pixels across {nrows} rows, leaving {usable_cols} of {ncols} "
+            f"columns common to every row. Use a shorter ROI or a wider crop.")
     n_erf = usable_cols * subsample
-    x_erf_grid = np.arange(n_erf) * erf_pixel_size  # common output grid (mm)
+    # WHERE the common region starts. Row r is shifted by -step*r, so with a
+    # negative step every row moves right and the region common to all of them
+    # begins at +travel rather than at 0. Starting at 0 regardless — which is
+    # what an unsigned grid does — put most rows outside the interpolation
+    # range for a negative angle, where they were discarded as NaN.
+    x_start = (travel * pixel_size) if step_per_row < 0 else 0.0
+    x_erf_grid = x_start + np.arange(n_erf) * erf_pixel_size  # common grid (mm)
 
     # Pre-compute for array sizing: final ERF length after block-averaging
     array_1_length = n_erf // subsample
@@ -95,11 +144,8 @@ def get_MTF(image_data, crop_indices, find_absolute_MTF=True, pixel_size=0.05,
         ERF_sum = np.zeros(n_erf)
         ERF_count = np.zeros(n_erf)
         for row in range(sl.shape[0]):
-            # Fractional shift for this row (mm)
-            if high_to_low:
-                dx = -row * shift_per_row * pixel_size
-            else:
-                dx = row * shift_per_row * pixel_size
+            # Fractional shift for this row (mm), signed
+            dx = step_per_row * row * pixel_size
             # Shifted x-coordinates for this row
             x_shifted = x_orig - dx
             # Interpolate onto the common grid

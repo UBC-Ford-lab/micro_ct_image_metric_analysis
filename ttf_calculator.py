@@ -9,8 +9,17 @@ import matplotlib.pyplot as plt
 import scipy.signal
 from photutils.profiles import RadialProfile
 
+#: A TTF measured on an edge the observer cannot see is a noise spectrum, not
+#: a transfer function. Inserts below this contrast-to-noise ratio are left out
+#: of the averaged TTF, and a caller reading TTF_array row by row should drop
+#: them too -- on a noisy reconstruction they come out HIGHER than the
+#: high-contrast inserts, which reads as better resolution.
+DEFAULT_CNR_THRESHOLD = 5.0
+
+
 def get_TTF(image_data, centre_pixels, radius, materials=None, find_absolute_TTF=True, pixel_size=0.05,
-            target_directory=os.getcwd(), plot_results=True, process_LSF=True):
+            target_directory=os.getcwd(), plot_results=True, process_LSF=True,
+            cnr_threshold=DEFAULT_CNR_THRESHOLD):
     """
     This function calculates the Task Transfer Function (TTF) on image data.
     :param image_data: The image data as a 3D numpy array (z, y, x)
@@ -22,8 +31,25 @@ def get_TTF(image_data, centre_pixels, radius, materials=None, find_absolute_TTF
                         (Note: you need to set the pixel size manually!)
     :param target_directory: Where to save the cropped image (if desired)
     :param plot_results: Boolean to plot the results or not
-    :return: TTF_freq: The frequency axis of the TTF
-    :return: TTF_array: The Task Transfer Functions for each material
+    :param cnr_threshold: Inserts whose contrast-to-noise ratio is at or below
+                        this are excluded from the AVERAGED TTF (default 5).
+                        They are still returned in TTF_array -- see the note on
+                        DEFAULT_CNR_THRESHOLD before reading one of those rows
+                        as a measurement.
+    :return: TTF_freq: The frequency axis of the TTF, in mm^-1. TWO-SIDED and
+                       fftshifted, i.e. it runs from -Nyquist to +Nyquist with
+                       DC in the middle -- TTF_freq[0] is NOT zero frequency.
+                       Take TTF_freq >= 0 before normalising or before reading
+                       a crossing off the curve.
+                       Nyquist here is that of the SUPERSAMPLED radial profile
+                       (1 / (2 * sampling_pixel_increment * pixel_size)), which
+                       is 1/sampling_pixel_increment times the pixel Nyquist
+                       that get_MTF reports on.
+    :return: TTF_array: The Task Transfer Functions for each material, ONE ROW
+                       PER INSERT AND UNWEIGHTED -- a row whose CNR is at or
+                       below cnr_threshold is noise, and on a noisy
+                       reconstruction it reads HIGHER than the high-contrast
+                       rows. Gate on CNR_array before using one.
     :return: CNR_array: The Contrast-to-Noise Ratio for each material
     """
     if process_LSF:
@@ -49,6 +75,17 @@ def get_TTF(image_data, centre_pixels, radius, materials=None, find_absolute_TTF
     ERF_array = np.empty((len(centre_pixels), image_data.shape[0], radial_length))
     LSF_array = np.empty((len(centre_pixels), radial_length))
     LSF_x_axis = np.linspace((radius-radial_length*sampling_pixel_increment)*pixel_size, radius*pixel_size, LSF_array.shape[1])
+
+    # Every insert crop must fit. A centre closer to the border than `radius`
+    # produces a negative start index, which numpy reads as "from the other
+    # end" — a silently wrong, silently smaller ROI rather than an error.
+    ny, nx = image_data.shape[1], image_data.shape[2]
+    for i, c in enumerate(centre_pixels):
+        if not (radius <= c[0] <= ny - radius and radius <= c[1] <= nx - radius):
+            raise ValueError(
+                f"TTF insert {i} at (y={c[0]}, x={c[1]}) is closer than the "
+                f"{radius}-pixel analysis radius to the edge of a {ny}x{nx} "
+                f"image; its crop would run off the array")
 
     # now the ROIs are iterated through
     for i in range(len(centre_pixels)):
@@ -121,16 +158,38 @@ def get_TTF(image_data, centre_pixels, radius, materials=None, find_absolute_TTF
         slice_CNRs = np.mean(slice_CNRs)
         CNR_array = np.append(CNR_array, slice_CNRs)
 
-    # assign weights to the TTFs based on the CNR (0 if CNR < 5, 1 if CNR > 5)
-    weights = np.where(CNR_array > 5, 1, 0)
+    # assign weights to the TTFs based on the CNR
+    weights = np.where(CNR_array > cnr_threshold, 1, 0)
+    if not weights.any():
+        raise ValueError(
+            f"no insert reaches the CNR threshold of {cnr_threshold} "
+            f"(measured {np.array2string(np.asarray(CNR_array), precision=2)})"
+            f"; there is no edge here to measure a transfer function from")
 
     # calculate the TTF (average over all ROIs and all slices with weights based on CNR)
     TTF = np.average(TTF_array, axis=0, weights=weights)
     # calculate the TTF frequency axis
-    TTF_freq = np.fft.fftshift(np.fft.fftfreq(len(TTF), d=pixel_size))
+    #
+    # d IS THE SPACING OF THE LSF SAMPLES, NOT OF THE PIXELS. The radial ERF
+    # above is sampled every `sampling_pixel_increment` of a pixel and is
+    # never averaged back to pixel spacing (unlike get_MTF, which block-
+    # averages its 4x ERF at mtf_calculator's `reshape(-1, subsample).mean`),
+    # so passing d=pixel_size made this axis — and TTF50/TTF10 with it —
+    # 1/sampling_pixel_increment times too small.
+    #
+    # MEASURED 2026-08-24 on a micro-CT phantom: TTF50 came out 3-4x BELOW the
+    # MTF50 of the same volumes, while a direct 10-90% edge-rise measurement
+    # put the circular insert edge (0.84 mm) SHARPER than the slanted edge
+    # (1.00 mm) — the opposite ordering. With the corrected spacing the two
+    # metrics line up.
+    lsf_sample_spacing = sampling_pixel_increment * pixel_size
+    TTF_freq = np.fft.fftshift(np.fft.fftfreq(len(TTF), d=lsf_sample_spacing))
 
-    # interpolate the TTF to find TTF50 and TTF10 (makes it more accurate)
-    TTF_freq_interpolated = np.linspace(0, np.max(TTF_freq), 1000)
+    # interpolate the TTF to find TTF50 and TTF10 (makes it more accurate).
+    # The grid is sized from the axis so its resolution does not change when
+    # the axis does.
+    TTF_freq_interpolated = np.linspace(0, np.max(TTF_freq),
+                                        max(1000, 4 * len(TTF)))
     TTF_interpolated = np.interp(TTF_freq_interpolated, TTF_freq[TTF_freq>0], TTF[TTF_freq>0])
 
     # find TTF50
