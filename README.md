@@ -265,12 +265,22 @@ ct-dprime npw --mtf_npz metrics_mtf.npz \
 | `--nps_npz` | Yes | .npz file with `nps_freq` and `nps` arrays |
 | `--disc_diameters` | No | Comma-separated disc diameters in mm (default: 0.15,0.5,1.0,3.0) |
 | `--contrast` | No | Contrast in HU (default: 100, soft tissue) |
+| `--rose_threshold` | No | Threshold at which the detectable disc size is read off (default: 3, the Rose criterion) |
 | `--output_dir` | No | Output directory (default: ./results) |
 | `--no_plot` | No | Disable plot generation |
 | `--show` | No | Display plots interactively |
 
 Default disc diameters for micro-CT: **0.15 mm** (finest resolvable detail), **0.5 mm** (bronchioles), **1.0 mm** (small lesions), **3.0 mm** (larger structures).
 A feature is considered detectable when d' ≥ 3 (Rose criterion).
+
+**The headline number is a size, not an index.** Alongside d' at each requested
+diameter, d' is evaluated on a dense diameter grid and the run prints (and
+plots) the **detectable disc size**: the diameter at which the curve crosses
+the threshold, in mm. d' at a fixed disc size spans orders of magnitude between
+systems and is hard to read comparatively; the diameter at a fixed d' does not.
+The crossing is `nan` when it falls outside the sampled grid -- either every
+sampled disc is already above the threshold or none of them reach it -- rather
+than being extrapolated.
 
 ### ct-metrics -- All Metrics at Once
 
@@ -422,15 +432,24 @@ result = d_prime_calculator.get_d_prime_npw(
     disc_diameters_mm=[0.15, 0.5, 1.0, 3.0],   # micro-CT task sizes
     contrast_hu=100.0,                          # soft-tissue contrast
     normalize_mtf=True,
+    rose_threshold=3.0,                         # Rose criterion
     plot_results=True,
     target_directory='results/',
 )
 
-# result['d_prime']            -- array of d' values per disc diameter
-# result['disc_diameters_mm']  -- corresponding diameters
-# result['contrast_hu']        -- contrast used
-# Features with d' >= 3 are detectable (Rose criterion)
+# result['d_prime']                  -- array of d' values per disc diameter
+# result['disc_diameters_mm']        -- corresponding diameters
+# result['contrast_hu']              -- contrast used
+# result['curve_diameters_mm']       -- dense grid the crossing is read off
+# result['curve_d_prime']            -- d' on that grid
+# result['diameter_at_threshold_mm'] -- DETECTABLE DISC SIZE in mm, or nan
+# result['rose_threshold']           -- the threshold used
 ```
+
+`d_prime_calculator.diameter_at_threshold(diameters, d_prime, threshold)`
+locates the crossing on any pair of arrays, so a caller that already has a
+d' curve does not have to recompute one. `get_d_prime_npwe` returns the same
+keys with a human contrast-sensitivity filter applied.
 
 #### All Metrics at Once
 

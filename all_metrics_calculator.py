@@ -104,12 +104,21 @@ def run_all_metrics(config):
             mtf_freq, mtf_val, nps_freq, nps_val,
             disc_diameters_mm=npw_cfg.get('disc_diameters_mm'),
             contrast_hu=npw_cfg.get('contrast_hu'),
+            rose_threshold=npw_cfg.get('rose_threshold',
+                                       d_prime_calculator.ROSE_THRESHOLD),
             plot_results=True, target_directory=target_directory)
 
         print(f"  NPW d' (ΔC={result['contrast_hu']:.0f} HU): "
               + ", ".join(f"{d:.2f}mm→{dp:.1f}"
                           for d, dp in zip(result['disc_diameters_mm'],
                                            result['d_prime'])))
+        size = result['diameter_at_threshold_mm']
+        threshold = result['rose_threshold']
+        if np.isfinite(size):
+            print(f"  detectable disc size at d'={threshold:g} (Rose): "
+                  f"{size:.3f} mm")
+        else:
+            print(f"  d' never reaches {threshold:g} on the sampled diameters")
 
     print("All metrics calculated successfully. Results saved to:", target_directory)
 

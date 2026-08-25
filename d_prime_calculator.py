@@ -57,62 +57,79 @@ def disc_task_function(f, radius_mm, contrast_hu):
     return W
 
 
-def get_d_prime_npw(mtf_freq, mtf, nps_freq, nps,
-                    disc_diameters_mm=None, contrast_hu=None,
-                    normalize_mtf=True, n_freq=500,
-                    plot_results=True, target_directory=None):
-    """Compute NPW-observer detectability index for multiple disc sizes.
+# Rose criterion.  The classical threshold for a signal-known-exactly
+# detection task: d' >= 3 is conventionally read as "reliably detectable".
+ROSE_THRESHOLD = 3.0
 
-    Uses pre-computed 1D MTF and NPS curves and the AAPM TG-233
-    non-prewhitening (NPW) matched-filter formulation:
 
-        d'² = [∫ |W(f)|² MTF²(f) f df]²
-              / [∫ |W(f)|² MTF²(f) NPS(f) f df]
+def curve_diameter_grid(disc_diameters_mm, n=241):
+    """Dense, geometrically spaced diameter grid bracketing *disc_diameters_mm*.
 
-    where W(f) is the analytical Bessel-function task function for a
-    uniform disc and the integrals run from 0 to the Nyquist frequency.
+    d' is reported at a handful of nominal disc sizes, but a threshold
+    crossing has to be read off a continuous curve, so it is evaluated on a
+    grid running from a fifth of the smallest requested disc to five times
+    the largest.  Widening it that far is what keeps the crossing inside the
+    sampled range across a wide spread of noise levels.
+    """
+    d = np.asarray(disc_diameters_mm, dtype=np.float64)
+    return np.geomspace(0.2 * d.min(), 5.0 * d.max(), int(n))
+
+
+def diameter_at_threshold(diameters, d_prime, threshold=ROSE_THRESHOLD):
+    """Disc diameter at which d' reaches *threshold* -- the detectable size.
+
+    d' grows with disc size, so the curve crosses the threshold once, from
+    below; the crossing is located by linear interpolation between the two
+    bracketing samples (linear in both diameter and d', matching the axes
+    the curve is plotted on).  If the curve is not monotonic the *last*
+    upward crossing is taken, i.e. the smallest diameter above which d'
+    never drops back below the threshold.
+
+    Returns nan when the crossing lies outside the sampled diameters --
+    either every sampled disc is already above the threshold, or none of
+    them reach it.  That is a real answer ("this grid cannot locate it"),
+    not an error; a caller that needs a number must widen the grid.
 
     Args:
-        mtf_freq: 1D array of MTF frequencies (mm⁻¹).
-        mtf: 1D array of MTF values (absolute or normalized).
-        nps_freq: 1D array of NPS frequencies (mm⁻¹).
-        nps: 1D array of NPS values (HU² mm²).
-        disc_diameters_mm: List of disc diameters in mm.
-            Defaults to DEFAULT_DISC_DIAMETERS [0.15, 0.5, 1.0, 3.0].
-        contrast_hu: Contrast between disc and background in HU.
-            Defaults to DEFAULT_CONTRAST_HU (100 HU, soft tissue).
-        normalize_mtf: If True, normalize MTF to unity at f=0 before
-            computing d'.  Recommended when absolute MTF scale varies
-            across methods.
-        n_freq: Number of frequency samples for integration grid.
-        plot_results: Whether to save a diagnostic plot.
-        target_directory: Output directory for the plot.
-            If None, uses current working directory.
+        diameters: 1D array of disc diameters (mm), in any order.
+        d_prime: 1D array of d' values, one per diameter.
+        threshold: Detectability threshold (default ROSE_THRESHOLD = 3).
 
     Returns:
-        dict with keys:
-            'disc_diameters_mm': array of disc diameters
-            'contrast_hu': contrast used
-            'd_prime': array of d' values, one per disc diameter
-            'freq': integration frequency grid
-            'task_functions': dict mapping diameter → W(f) array
+        Diameter in mm at the crossing, or nan.
     """
-    if disc_diameters_mm is None:
-        disc_diameters_mm = list(DEFAULT_DISC_DIAMETERS)
-    if contrast_hu is None:
-        contrast_hu = DEFAULT_CONTRAST_HU
-    if target_directory is None:
-        target_directory = os.getcwd()
+    d = np.asarray(diameters, dtype=np.float64)
+    y = np.asarray(d_prime, dtype=np.float64)
+    order = np.argsort(d)
+    d, y = d[order], y[order]
+    keep = np.isfinite(d) & np.isfinite(y)
+    d, y = d[keep], y[keep]
+    if d.size < 2:
+        return float('nan')
 
-    disc_diameters_mm = np.asarray(disc_diameters_mm, dtype=np.float64)
+    below = np.nonzero(y < threshold)[0]
+    if below.size == 0 or below[-1] == d.size - 1:
+        return float('nan')
 
-    # Build a common frequency grid up to the shared Nyquist
+    lo = int(below[-1])
+    hi = lo + 1
+    span = y[hi] - y[lo]
+    if span <= 0:
+        return float('nan')
+    t = (threshold - y[lo]) / span
+    return float(d[lo] + t * (d[hi] - d[lo]))
+
+
+def _resample_mtf_nps(mtf_freq, mtf, nps_freq, nps, normalize_mtf, n_freq):
+    """Put the MTF and the NPS on one frequency grid up to the shared Nyquist."""
+    mtf_freq = np.asarray(mtf_freq, dtype=np.float64)
+    nps_freq = np.asarray(nps_freq, dtype=np.float64)
+
     pos_mtf = mtf_freq >= 0
     f_max = min(mtf_freq[pos_mtf].max(), nps_freq.max())
     freq = np.linspace(0, f_max, n_freq)
 
-    # Interpolate MTF and NPS onto the common grid
-    mtf_interp = interp1d(mtf_freq[pos_mtf], mtf[pos_mtf],
+    mtf_interp = interp1d(mtf_freq[pos_mtf], np.asarray(mtf)[pos_mtf],
                           bounds_error=False, fill_value=0.0)(freq)
     nps_interp = interp1d(nps_freq, nps,
                           bounds_error=False, fill_value='extrapolate')(freq)
@@ -124,36 +141,134 @@ def get_d_prime_npw(mtf_freq, mtf, nps_freq, nps,
 
     # Protect against zero/negative NPS
     nps_interp = np.maximum(nps_interp, np.max(nps_interp) * 1e-12)
+    return freq, mtf_interp, nps_interp
 
-    # Compute d' for each disc diameter
-    d_prime_values = np.empty(len(disc_diameters_mm))
+
+def _d_prime_for_diameters(freq, mtf, nps, diameters, contrast_hu, eye=None):
+    """NPW (eye=None) or NPWE d' for each diameter, plus the task functions.
+
+    See get_d_prime_npw / get_d_prime_npwe for the two integrals; the eye
+    filter enters the numerator as E^2 and the denominator as E^4.
+    """
+    diameters = np.asarray(diameters, dtype=np.float64)
+    e_num = 1.0 if eye is None else np.asarray(eye) ** 2
+    e_den = 1.0 if eye is None else np.asarray(eye) ** 4
+
+    values = np.empty(len(diameters))
     task_functions = {}
+    for i, diam in enumerate(diameters):
+        W = disc_task_function(freq, diam / 2.0, contrast_hu)
+        task_functions[float(diam)] = W
 
-    for i, diam in enumerate(disc_diameters_mm):
-        R = diam / 2.0
-        W = disc_task_function(freq, R, contrast_hu)
-        task_functions[diam] = W
-
-        integrand_num = np.abs(W) ** 2 * mtf_interp ** 2 * freq
-        integrand_den = np.abs(W) ** 2 * mtf_interp ** 2 * nps_interp * freq
-
-        numerator = scipy.integrate.simpson(integrand_num, x=freq)
-        denominator = scipy.integrate.simpson(integrand_den, x=freq)
+        common = np.abs(W) ** 2 * mtf ** 2 * freq
+        numerator = scipy.integrate.simpson(common * e_num, x=freq)
+        denominator = scipy.integrate.simpson(common * e_den * nps, x=freq)
 
         if denominator > 0 and numerator > 0:
-            d_prime_values[i] = numerator / np.sqrt(denominator)
+            values[i] = numerator / np.sqrt(denominator)
         else:
-            d_prime_values[i] = 0.0
+            values[i] = 0.0
+    return values, task_functions
+
+
+def get_d_prime_npw(mtf_freq, mtf, nps_freq, nps,
+                    disc_diameters_mm=None, contrast_hu=None,
+                    normalize_mtf=True, n_freq=500,
+                    rose_threshold=ROSE_THRESHOLD, curve_diameters_mm=None,
+                    plot_results=True, target_directory=None):
+    """Compute NPW-observer detectability index for multiple disc sizes.
+
+    Uses pre-computed 1D MTF and NPS curves and the AAPM TG-233
+    non-prewhitening (NPW) matched-filter formulation:
+
+        d'^2 = [integral |W(f)|^2 MTF^2(f) f df]^2
+              / [integral |W(f)|^2 MTF^2(f) NPS(f) f df]
+
+    where W(f) is the analytical Bessel-function task function for a
+    uniform disc and the integrals run from 0 to the Nyquist frequency.
+
+    Besides d' at each requested diameter, d' is evaluated on a dense
+    diameter grid so the *detectable disc size* -- the diameter at which
+    d' crosses `rose_threshold` -- can be read off the curve.  That single
+    number in mm is the headline result: it says how small an object of
+    this contrast the system resolves out of its own noise, and unlike d'
+    at a fixed diameter it stays readable when two methods differ by an
+    order of magnitude.
+
+    Args:
+        mtf_freq: 1D array of MTF frequencies (mm^-1).
+        mtf: 1D array of MTF values (absolute or normalized).
+        nps_freq: 1D array of NPS frequencies (mm^-1).
+        nps: 1D array of NPS values (HU^2 mm^2).
+        disc_diameters_mm: List of disc diameters in mm.
+            Defaults to DEFAULT_DISC_DIAMETERS [0.15, 0.5, 1.0, 3.0].
+        contrast_hu: Contrast between disc and background in HU.
+            Defaults to DEFAULT_CONTRAST_HU (100 HU, soft tissue).
+        normalize_mtf: If True, normalize MTF to unity at f=0 before
+            computing d'.  Recommended when absolute MTF scale varies
+            across methods.
+        n_freq: Number of frequency samples for integration grid.
+        rose_threshold: Detectability threshold for the reported disc size
+            (default ROSE_THRESHOLD = 3, the Rose criterion).
+        curve_diameters_mm: Diameter grid for the continuous d' curve and
+            the threshold crossing.  Defaults to curve_diameter_grid() over
+            the requested diameters.
+        plot_results: Whether to save a diagnostic plot.
+        target_directory: Output directory for the plot.
+            If None, uses current working directory.
+
+    Returns:
+        dict with keys:
+            'disc_diameters_mm': array of requested disc diameters
+            'contrast_hu': contrast used
+            'd_prime': array of d' values, one per requested diameter
+            'curve_diameters_mm': dense diameter grid
+            'curve_d_prime': d' on that grid
+            'rose_threshold': the threshold used
+            'diameter_at_threshold_mm': detectable disc size (mm), or nan
+                if the crossing falls outside the grid
+            'freq': integration frequency grid
+            'task_functions': dict mapping diameter -> W(f) array
+    """
+    if disc_diameters_mm is None:
+        disc_diameters_mm = list(DEFAULT_DISC_DIAMETERS)
+    if contrast_hu is None:
+        contrast_hu = DEFAULT_CONTRAST_HU
+    if target_directory is None:
+        target_directory = os.getcwd()
+
+    disc_diameters_mm = np.asarray(disc_diameters_mm, dtype=np.float64)
+    if curve_diameters_mm is None:
+        curve_diameters_mm = curve_diameter_grid(disc_diameters_mm)
+    curve_diameters_mm = np.asarray(curve_diameters_mm, dtype=np.float64)
+
+    freq, mtf_interp, nps_interp = _resample_mtf_nps(
+        mtf_freq, mtf, nps_freq, nps, normalize_mtf, n_freq)
+
+    d_prime_values, task_functions = _d_prime_for_diameters(
+        freq, mtf_interp, nps_interp, disc_diameters_mm, contrast_hu)
+    curve_values, _ = _d_prime_for_diameters(
+        freq, mtf_interp, nps_interp, curve_diameters_mm, contrast_hu)
+    d_at_threshold = diameter_at_threshold(curve_diameters_mm, curve_values,
+                                           rose_threshold)
 
     if plot_results:
         _plot_d_prime_npw(freq, mtf_interp, nps_interp, task_functions,
                           disc_diameters_mm, d_prime_values, contrast_hu,
-                          target_directory)
+                          target_directory,
+                          curve_diameters_mm=curve_diameters_mm,
+                          curve_d_prime=curve_values,
+                          rose_threshold=rose_threshold,
+                          diameter_at_threshold_mm=d_at_threshold)
 
     return {
         'disc_diameters_mm': disc_diameters_mm,
         'contrast_hu': contrast_hu,
         'd_prime': d_prime_values,
+        'curve_diameters_mm': curve_diameters_mm,
+        'curve_d_prime': curve_values,
+        'rose_threshold': float(rose_threshold),
+        'diameter_at_threshold_mm': d_at_threshold,
         'freq': freq,
         'task_functions': task_functions,
     }
@@ -161,7 +276,11 @@ def get_d_prime_npw(mtf_freq, mtf, nps_freq, nps,
 
 def _plot_d_prime_npw(freq, mtf, nps, task_functions,
                       diameters, d_prime, contrast_hu, target_directory,
-                      observer_label='NPW', plot_filename='Detectability_NPW_plot.png'):
+                      curve_diameters_mm=None, curve_d_prime=None,
+                      rose_threshold=ROSE_THRESHOLD,
+                      diameter_at_threshold_mm=float('nan'),
+                      observer_label='NPW',
+                      plot_filename='Detectability_NPW_plot.png'):
     """Save diagnostic plot for NPW/NPWE d' calculation."""
     fig, axes = plt.subplots(1, 3, figsize=(16, 5))
 
@@ -169,7 +288,7 @@ def _plot_d_prime_npw(freq, mtf, nps, task_functions,
     ax = axes[0]
     colors = plt.cm.viridis(np.linspace(0.2, 0.9, len(diameters)))
     for diam, col in zip(diameters, colors):
-        W = task_functions[diam]
+        W = task_functions[float(diam)]
         W_norm = W / W.max() if W.max() > 0 else W
         ax.plot(freq, W_norm, color=col, linewidth=1.5,
                 label=f'{diam:.2f} mm')
@@ -195,35 +314,67 @@ def _plot_d_prime_npw(freq, mtf, nps, task_functions,
     lines2, labels2 = ax2.get_legend_handles_labels()
     ax.legend(lines1 + lines2, labels1 + labels2, fontsize=8)
 
-    # (c) d' bar chart
+    # (c) d' against disc diameter, linear on BOTH axes.  Linear is the point:
+    # the quantity being read off is where the curve cuts the threshold, and a
+    # log axis distorts both that crossing and the spacing between methods.
     ax = axes[2]
-    x_pos = np.arange(len(diameters))
-    bars = ax.bar(x_pos, d_prime, color=colors, edgecolor='black',
-                  linewidth=0.5, width=0.6)
-    ax.axhline(3.0, color='gray', linestyle='--', linewidth=1, alpha=0.7)
-    ax.axhline(5.0, color='gray', linestyle=':', linewidth=1, alpha=0.5)
-    ax.text(len(diameters) - 0.5, 3.2, "Rose (d'=3)", fontsize=7,
-            color='gray', ha='right')
-    ax.text(len(diameters) - 0.5, 5.2, "d'=5", fontsize=7,
-            color='gray', ha='right')
-    for bar, val in zip(bars, d_prime):
-        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.1,
-                f'{val:.1f}', ha='center', va='bottom', fontsize=8,
-                fontweight='bold')
-    ax.set_xticks(x_pos)
-    ax.set_xticklabels([f'{d:.2f}' for d in diameters], fontsize=8)
+    if curve_diameters_mm is not None and curve_d_prime is not None:
+        ax.plot(curve_diameters_mm, curve_d_prime, '-', color='0.35',
+                linewidth=1.5, zorder=2)
+    ax.scatter(diameters, d_prime, s=40, c=colors, edgecolor='black',
+               linewidth=0.5, zorder=3)
+    for diam, val in zip(diameters, d_prime):
+        ax.annotate(f'{val:.1f}', (diam, val), textcoords='offset points',
+                    xytext=(0, 7), ha='center', fontsize=8, fontweight='bold')
+
+    ax.axhline(rose_threshold, color='crimson', linestyle=':', linewidth=1.5,
+               zorder=1)
+
+    x_max = float(np.max(diameters))
+    if np.isfinite(diameter_at_threshold_mm):
+        x_max = max(x_max, diameter_at_threshold_mm)
+    x_max *= 1.08
+
+    finite = np.asarray(d_prime, dtype=np.float64)
+    finite = finite[np.isfinite(finite)]
+    y_max = float(finite.max()) if finite.size else float(rose_threshold)
+    y_max = max(y_max, float(rose_threshold)) * 1.18
+
+    # Both labels hug the right edge, one above the threshold line and one
+    # below it: that corner is empty whatever the curve does, while the space
+    # around the crossing itself is not.
+    ax.text(0.99 * x_max, rose_threshold, f"d'={rose_threshold:g} (Rose) ",
+            fontsize=7, color='crimson', ha='right', va='bottom')
+    if np.isfinite(diameter_at_threshold_mm):
+        ax.plot([diameter_at_threshold_mm], [rose_threshold], 'v',
+                color='crimson', markersize=8, zorder=4)
+        ax.vlines(diameter_at_threshold_mm, 0, rose_threshold,
+                  color='crimson', linestyle=':', linewidth=1.5, zorder=1)
+        label = f'detectable at {diameter_at_threshold_mm:.3f} mm'
+    else:
+        label = 'threshold not crossed'
+    ax.text(0.99 * x_max, 0.94 * rose_threshold, label, fontsize=9,
+            color='crimson', fontweight='bold', ha='right', va='top')
+
     ax.set_xlabel('Disc diameter (mm)')
     ax.set_ylabel("Detectability index d'")
-    ax.set_title(f"(c) {observer_label} d' (ΔC = {contrast_hu:.0f} HU)",
+    ax.set_title(f"(c) {observer_label} d' (contrast = {contrast_hu:.0f} HU)",
                  fontweight='bold')
-    ax.set_ylim(bottom=0)
-    ax.grid(True, alpha=0.3, axis='y')
+    ax.set_xlim(0, x_max)
+    ax.set_ylim(0, y_max)
+    ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
     path = os.path.join(target_directory, plot_filename)
     fig.savefig(path, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f"  {observer_label} d' plot saved to: {path}")
+    if np.isfinite(diameter_at_threshold_mm):
+        print(f"  {observer_label} detectable disc size at d'="
+              f"{rose_threshold:g}: {diameter_at_threshold_mm:.3f} mm")
+    else:
+        print(f"  {observer_label} d' never crosses {rose_threshold:g} on the "
+              f"sampled diameters -- no detectable size to report")
 
 
 # =============================================================================
@@ -305,6 +456,7 @@ def eye_filter(f_mm, n=DEFAULT_EYE_FILTER_N,
 def get_d_prime_npwe(mtf_freq, mtf, nps_freq, nps,
                      disc_diameters_mm=None, contrast_hu=None,
                      normalize_mtf=True, n_freq=500,
+                     rose_threshold=ROSE_THRESHOLD, curve_diameters_mm=None,
                      eye_filter_n=DEFAULT_EYE_FILTER_N,
                      eye_filter_fc_cy_per_deg=DEFAULT_EYE_FILTER_FC_CY_PER_DEG,
                      viewing_distance_mm=DEFAULT_VIEWING_DISTANCE_MM,
@@ -336,10 +488,11 @@ def get_d_prime_npwe(mtf_freq, mtf, nps_freq, nps,
     system-weighted observer. See eye_filter() docstring for the viewing
     distance / magnification assumptions this relies on.
 
-    Args/Returns: identical to get_d_prime_npw, plus the eye_filter_n,
-    eye_filter_fc_cy_per_deg, viewing_distance_mm, magnification knobs
-    above, and an added 'eye_filter' key in the returned dict (E(f) on
-    the same 'freq' grid).
+    Args/Returns: identical to get_d_prime_npw -- including the dense d'
+    curve and the `rose_threshold` crossing reported as a detectable disc
+    size in mm -- plus the eye_filter_n, eye_filter_fc_cy_per_deg,
+    viewing_distance_mm, magnification knobs above, and an added
+    'eye_filter' key in the returned dict (E(f) on the same 'freq' grid).
     """
     if disc_diameters_mm is None:
         disc_diameters_mm = list(DEFAULT_DISC_DIAMETERS)
@@ -349,55 +502,42 @@ def get_d_prime_npwe(mtf_freq, mtf, nps_freq, nps,
         target_directory = os.getcwd()
 
     disc_diameters_mm = np.asarray(disc_diameters_mm, dtype=np.float64)
+    if curve_diameters_mm is None:
+        curve_diameters_mm = curve_diameter_grid(disc_diameters_mm)
+    curve_diameters_mm = np.asarray(curve_diameters_mm, dtype=np.float64)
 
-    pos_mtf = mtf_freq >= 0
-    f_max = min(mtf_freq[pos_mtf].max(), nps_freq.max())
-    freq = np.linspace(0, f_max, n_freq)
-
-    mtf_interp = interp1d(mtf_freq[pos_mtf], mtf[pos_mtf],
-                          bounds_error=False, fill_value=0.0)(freq)
-    nps_interp = interp1d(nps_freq, nps,
-                          bounds_error=False, fill_value='extrapolate')(freq)
-
-    if normalize_mtf:
-        mtf_max = mtf_interp.max()
-        if mtf_max > 0:
-            mtf_interp = mtf_interp / mtf_max
-
-    nps_interp = np.maximum(nps_interp, np.max(nps_interp) * 1e-12)
+    freq, mtf_interp, nps_interp = _resample_mtf_nps(
+        mtf_freq, mtf, nps_freq, nps, normalize_mtf, n_freq)
 
     E = eye_filter(freq, n=eye_filter_n, f_c_cy_per_deg=eye_filter_fc_cy_per_deg,
                    viewing_distance_mm=viewing_distance_mm, magnification=magnification)
 
-    d_prime_values = np.empty(len(disc_diameters_mm))
-    task_functions = {}
-
-    for i, diam in enumerate(disc_diameters_mm):
-        R = diam / 2.0
-        W = disc_task_function(freq, R, contrast_hu)
-        task_functions[diam] = W
-
-        integrand_num = np.abs(W) ** 2 * mtf_interp ** 2 * E ** 2 * freq
-        integrand_den = np.abs(W) ** 2 * mtf_interp ** 2 * E ** 4 * nps_interp * freq
-
-        numerator = scipy.integrate.simpson(integrand_num, x=freq)
-        denominator = scipy.integrate.simpson(integrand_den, x=freq)
-
-        if denominator > 0 and numerator > 0:
-            d_prime_values[i] = numerator / np.sqrt(denominator)
-        else:
-            d_prime_values[i] = 0.0
+    d_prime_values, task_functions = _d_prime_for_diameters(
+        freq, mtf_interp, nps_interp, disc_diameters_mm, contrast_hu, eye=E)
+    curve_values, _ = _d_prime_for_diameters(
+        freq, mtf_interp, nps_interp, curve_diameters_mm, contrast_hu, eye=E)
+    d_at_threshold = diameter_at_threshold(curve_diameters_mm, curve_values,
+                                           rose_threshold)
 
     if plot_results:
         _plot_d_prime_npw(freq, mtf_interp, nps_interp, task_functions,
                           disc_diameters_mm, d_prime_values, contrast_hu,
-                          target_directory, observer_label='NPWE',
+                          target_directory,
+                          curve_diameters_mm=curve_diameters_mm,
+                          curve_d_prime=curve_values,
+                          rose_threshold=rose_threshold,
+                          diameter_at_threshold_mm=d_at_threshold,
+                          observer_label='NPWE',
                           plot_filename='Detectability_NPWE_plot.png')
 
     return {
         'disc_diameters_mm': disc_diameters_mm,
         'contrast_hu': contrast_hu,
         'd_prime': d_prime_values,
+        'curve_diameters_mm': curve_diameters_mm,
+        'curve_d_prime': curve_values,
+        'rose_threshold': float(rose_threshold),
+        'diameter_at_threshold_mm': d_at_threshold,
         'freq': freq,
         'task_functions': task_functions,
         'eye_filter': E,
@@ -556,6 +696,10 @@ def parse_args():
                         help='Comma-separated disc diameters in mm (default: 0.15,0.5,1.0,3.0)')
     p_npw.add_argument('--contrast', type=float, default=DEFAULT_CONTRAST_HU,
                         help=f'Contrast in HU (default: {DEFAULT_CONTRAST_HU})')
+    p_npw.add_argument('--rose_threshold', type=float, default=ROSE_THRESHOLD,
+                        help='Detectability threshold at which the detectable '
+                             f'disc size is read off (default: {ROSE_THRESHOLD:g}, '
+                             'the Rose criterion)')
     p_npw.add_argument('--output_dir', type=str, default='./results', help='Output directory')
     p_npw.add_argument('--no_plot', action='store_true', help='Disable plot generation')
     p_npw.add_argument('--show', action='store_true', help='Display plots interactively')
@@ -582,6 +726,7 @@ def main():
             nps_data['nps_freq'], nps_data['nps'],
             disc_diameters_mm=diameters,
             contrast_hu=args.contrast,
+            rose_threshold=args.rose_threshold,
             plot_results=not args.no_plot,
             target_directory=output_dir,
         )
@@ -589,9 +734,18 @@ def main():
         print(f"\nNPW Detectability Index (ΔC = {result['contrast_hu']:.0f} HU)")
         print(f"{'Diameter (mm)':>14s}  {dp_header:>8s}  {'Detectable':>10s}")
         print('-' * 36)
+        threshold = result['rose_threshold']
         for d, dp in zip(result['disc_diameters_mm'], result['d_prime']):
-            flag = 'Yes' if dp >= 3.0 else 'No'
+            flag = 'Yes' if dp >= threshold else 'No'
             print(f'{d:>14.2f}  {dp:>8.1f}  {flag:>10s}')
+        print('-' * 36)
+        size = result['diameter_at_threshold_mm']
+        if np.isfinite(size):
+            print(f"Detectable disc size at the Rose threshold "
+                  f"(d'={threshold:g}): {size:.3f} mm")
+        else:
+            print(f"d' does not cross the Rose threshold (d'={threshold:g}) "
+                  f"anywhere on the sampled diameters")
 
     else:
         # TTF mode (original behaviour / default)
