@@ -62,7 +62,7 @@ def disc_task_function(f, radius_mm, contrast_hu):
 ROSE_THRESHOLD = 3.0
 
 
-def curve_diameter_grid(disc_diameters_mm, n=241):
+def curve_diameter_grid(disc_diameters_mm, n=1201):
     """Dense, geometrically spaced diameter grid bracketing *disc_diameters_mm*.
 
     d' is reported at a handful of nominal disc sizes, but a threshold
@@ -70,6 +70,11 @@ def curve_diameter_grid(disc_diameters_mm, n=241):
     grid running from a fifth of the smallest requested disc to five times
     the largest.  Widening it that far is what keeps the crossing inside the
     sampled range across a wide spread of noise levels.
+
+    The default n puts the samples well under a percent apart, so the curve
+    is smooth at any plotted scale and the crossing is set by the physics
+    rather than by the grid; d' at one diameter costs two 1D integrals, so
+    a dense grid is cheap.
     """
     d = np.asarray(disc_diameters_mm, dtype=np.float64)
     return np.geomspace(0.2 * d.min(), 5.0 * d.max(), int(n))
@@ -318,26 +323,26 @@ def _plot_d_prime_npw(freq, mtf, nps, task_functions,
     # the quantity being read off is where the curve cuts the threshold, and a
     # log axis distorts both that crossing and the spacing between methods.
     ax = axes[2]
-    if curve_diameters_mm is not None and curve_d_prime is not None:
-        ax.plot(curve_diameters_mm, curve_d_prime, '-', color='0.35',
-                linewidth=1.5, zorder=2)
-    ax.scatter(diameters, d_prime, s=40, c=colors, edgecolor='black',
-               linewidth=0.5, zorder=3)
-    for diam, val in zip(diameters, d_prime):
-        ax.annotate(f'{val:.1f}', (diam, val), textcoords='offset points',
-                    xytext=(0, 7), ha='center', fontsize=8, fontweight='bold')
-
-    ax.axhline(rose_threshold, color='crimson', linestyle=':', linewidth=1.5,
-               zorder=1)
-
     x_max = float(np.max(diameters))
     if np.isfinite(diameter_at_threshold_mm):
         x_max = max(x_max, diameter_at_threshold_mm)
     x_max *= 1.08
 
-    finite = np.asarray(d_prime, dtype=np.float64)
-    finite = finite[np.isfinite(finite)]
-    y_max = float(finite.max()) if finite.size else float(rose_threshold)
+    # The requested diameters are not marked on the curve: they are an
+    # arbitrary sample of a continuous quantity, and the reading being made
+    # here is the crossing, not the value at any one of them.
+    inside = np.asarray(d_prime, dtype=np.float64)
+    if curve_diameters_mm is not None and curve_d_prime is not None:
+        curve_x = np.asarray(curve_diameters_mm, dtype=np.float64)
+        curve_y = np.asarray(curve_d_prime, dtype=np.float64)
+        ax.plot(curve_x, curve_y, '-', color='0.35', linewidth=1.5, zorder=2)
+        inside = curve_y[curve_x <= x_max]
+
+    ax.axhline(rose_threshold, color='crimson', linestyle=':', linewidth=1.5,
+               zorder=1)
+
+    inside = inside[np.isfinite(inside)]
+    y_max = float(inside.max()) if inside.size else float(rose_threshold)
     y_max = max(y_max, float(rose_threshold)) * 1.18
 
     # Both labels hug the right edge, one above the threshold line and one
@@ -346,8 +351,8 @@ def _plot_d_prime_npw(freq, mtf, nps, task_functions,
     ax.text(0.99 * x_max, rose_threshold, f"d'={rose_threshold:g} (Rose) ",
             fontsize=7, color='crimson', ha='right', va='bottom')
     if np.isfinite(diameter_at_threshold_mm):
-        ax.plot([diameter_at_threshold_mm], [rose_threshold], 'v',
-                color='crimson', markersize=8, zorder=4)
+        # The crossing is where the two dotted lines meet; a marker on top of
+        # it only hides the curve at the one place worth looking at.
         ax.vlines(diameter_at_threshold_mm, 0, rose_threshold,
                   color='crimson', linestyle=':', linewidth=1.5, zorder=1)
         label = f'detectable at {diameter_at_threshold_mm:.3f} mm'
