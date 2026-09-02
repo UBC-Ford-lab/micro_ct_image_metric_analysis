@@ -92,7 +92,7 @@ def write_vff(filename, header, data, verbose=True):
     """
     Write a VFF file from a header dict and 2D/3D NumPy array.
 
-    Delegates to `reconstruction.ct_core.vff_io.write_vff`, which is the single
+    Delegates to `explore_ct120_recon.ct_core.vff_io.write_vff`, which is the single
     writer for the project. This function USED to emit a minimal
     `size/bits/format/endian` header; GE / Amalytics rejects those files
     ("ncaa is missing"), which is what scripts/fix_vff_header.py existed to
@@ -112,7 +112,7 @@ def write_vff(filename, header, data, verbose=True):
     _root = Path(__file__).resolve().parents[2]
     if str(_root) not in sys.path:
         sys.path.insert(0, str(_root))
-    from reconstruction.ct_core.vff_io import write_vff as _write_vff
+    from explore_ct120_recon.ct_core.vff_io import write_vff as _write_vff
 
     return _write_vff(filename, header, data, verbose=verbose)
 

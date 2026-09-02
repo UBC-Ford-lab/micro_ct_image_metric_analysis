@@ -26,7 +26,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib as mpl
-from reconstruction.ct_core.vff_io import read_vff
+from explore_ct120_recon.ct_core.vff_io import read_vff
 
 # Configure matplotlib for publication quality
 mpl.rcParams['font.family'] = 'sans-serif'

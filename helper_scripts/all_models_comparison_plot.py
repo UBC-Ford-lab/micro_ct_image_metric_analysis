@@ -25,7 +25,7 @@ from matplotlib.ticker import AutoMinorLocator
 import os
 from pathlib import Path
 
-from reconstruction.ct_core import vff_io as vff
+from explore_ct120_recon.ct_core import vff_io as vff
 from .. import mtf_calculator as MTF_calculator
 from .. import nps_calculator as NPS_calculator
 from .. import neq_calculator as NEQ_calculator
