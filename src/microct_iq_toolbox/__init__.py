@@ -21,7 +21,7 @@ The raw calculators (``get_MTF`` and friends) remain available and return
 their two-sided frequency axes unchanged.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 from . import mtf_calculator
 from . import nps_calculator

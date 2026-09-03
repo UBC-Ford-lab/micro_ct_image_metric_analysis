@@ -16,6 +16,9 @@ from pathlib import Path
 
 import numpy as np
 
+#: ``np.trapz`` was renamed ``np.trapezoid`` in NumPy 2.0 and removed in 2.3.
+trapezoid = getattr(np, "trapezoid", None) or getattr(np, "trapz")
+
 
 # --------------------------------------------------------------------------
 # Curve summaries
@@ -61,10 +64,10 @@ def nps_summary(freq, nps) -> dict:
     if f.size < 2 or p.sum() <= 0:
         return {'nps_total': float('nan'), 'nps_f_mean': float('nan'),
                 'nps_f_peak': float('nan')}
-    total = float(np.trapz(p, f))
+    total = float(trapezoid(p, f))
     return {
         'nps_total': total,
-        'nps_f_mean': float(np.trapz(p * f, f) / total) if total > 0 else float('nan'),
+        'nps_f_mean': float(trapezoid(p * f, f) / total) if total > 0 else float('nan'),
         'nps_f_peak': float(f[int(np.argmax(p))]),
     }
 

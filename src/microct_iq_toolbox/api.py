@@ -25,7 +25,7 @@ from . import mtf_calculator as _mtf
 from . import neq_calculator as _neq
 from . import nps_calculator as _nps
 from . import ttf_calculator as _ttf
-from .results import MetricResult, crossing, nps_summary, positive_half
+from .results import MetricResult, crossing, nps_summary, positive_half, trapezoid
 from .rois import Frame, PhantomROIs
 
 
@@ -104,7 +104,7 @@ def neq(mtf_result: MetricResult, nps_result: MetricResult) -> MetricResult:
     """NEQ = MTF^2 / NPS on the overlap of the two frequency axes."""
     f, v = _neq.neq_from_curves(mtf_result.x, mtf_result.y, nps_result.x, nps_result.y)
     good = np.isfinite(v)
-    total = float(np.trapz(v[good], f[good])) if good.sum() > 1 else float('nan')
+    total = float(trapezoid(v[good], f[good])) if good.sum() > 1 else float('nan')
     return MetricResult(kind='neq', x=f, y=v, summary={'neq_total': total},
                         meta={'from': ['mtf', 'nps']})
 
