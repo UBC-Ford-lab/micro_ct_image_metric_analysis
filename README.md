@@ -1,6 +1,6 @@
 # Micro-CT Image Quality Toolbox
 
-[![PyPI](https://img.shields.io/pypi/v/micro_ct_image_quality_toolbox.svg)](https://pypi.org/project/micro-ct-image-quality-toolbox/)
+[![PyPI](https://img.shields.io/pypi/v/micro-ct-image-quality-toolbox)](https://pypi.org/project/micro-ct-image-quality-toolbox/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 
