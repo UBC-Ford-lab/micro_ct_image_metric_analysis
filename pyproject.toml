@@ -3,44 +3,57 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "micro-ct-image-metric-analysis"
-version = "0.1.0"
-description = "CT image quality metrics: MTF, NPS, NEQ, TTF, and detectability index"
+name = "micro_ct_image_quality_toolbox"
+dynamic = ["version"]
+description = "CT image quality metrics: MTF, NPS, NEQ, TTF and detectability index d'"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
     {name = "Falk Wiegmann"},
 ]
-keywords = ["CT", "image quality", "MTF", "NPS", "NEQ", "TTF", "detectability", "micro-CT", "medical imaging"]
+keywords = ["CT", "micro-CT", "image quality", "MTF", "NPS", "NEQ", "TTF", "detectability index"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Medical Science Apps.",
     "Topic :: Scientific/Engineering :: Image Processing",
 ]
 dependencies = [
-    "numpy",
-    "scipy",
-    "matplotlib",
-    "photutils",
+    "numpy>=1.21",
+    "scipy>=1.7",
+    "matplotlib>=3.5",
 ]
 
+[project.optional-dependencies]
+photutils = ["photutils>=1.8"]
+dev = ["pytest>=8.0", "build", "twine", "photutils>=1.8"]
+
 [project.urls]
-Repository = "https://github.com/UBC-Ford-lab/micro_ct_image_metric_analysis"
+Repository = "https://github.com/UBC-Ford-lab/micro_ct_image_quality_toolbox"
+Issues = "https://github.com/UBC-Ford-lab/micro_ct_image_quality_toolbox/issues"
 
 [project.scripts]
-ct-mtf = "metric_calculators.mtf_calculator:main"
-ct-nps = "metric_calculators.nps_calculator:main"
-ct-neq = "metric_calculators.neq_calculator:main"
-ct-ttf = "metric_calculators.ttf_calculator:main"
-ct-dprime = "metric_calculators.d_prime_calculator:main"
-ct-metrics = "metric_calculators.all_metrics_calculator:main"
+ct-mtf = "microct_iq_toolbox.mtf_calculator:main"
+ct-nps = "microct_iq_toolbox.nps_calculator:main"
+ct-neq = "microct_iq_toolbox.neq_calculator:main"
+ct-ttf = "microct_iq_toolbox.ttf_calculator:main"
+ct-dprime = "microct_iq_toolbox.d_prime_calculator:main"
+ct-metrics = "microct_iq_toolbox.all_metrics_calculator:main"
+ct-find-rois = "microct_iq_toolbox.roi_fit:main"
+ct-report = "microct_iq_toolbox.report:main"
+ct-demo = "microct_iq_toolbox.demo:main"
 
-[tool.setuptools.package-dir]
-"metric_calculators" = "."
+[tool.setuptools.packages.find]
+where = ["src"]
 
-[tool.setuptools]
-py-modules = []
+[tool.setuptools.dynamic]
+version = {attr = "microct_iq_toolbox.__version__"}
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

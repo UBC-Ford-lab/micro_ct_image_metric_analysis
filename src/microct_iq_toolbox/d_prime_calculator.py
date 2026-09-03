@@ -7,7 +7,7 @@
 import numpy as np
 import os
 import matplotlib.pyplot as plt
-from photutils.profiles import RadialProfile
+from .helpers.radial import radial_profile as RadialProfile
 from scipy.interpolate import CubicSpline, interp1d
 from scipy.special import j1
 import scipy.integrate
@@ -180,7 +180,7 @@ def get_d_prime_npw(mtf_freq, mtf, nps_freq, nps,
                     disc_diameters_mm=None, contrast_hu=None,
                     normalize_mtf=True, n_freq=500,
                     rose_threshold=ROSE_THRESHOLD, curve_diameters_mm=None,
-                    plot_results=True, target_directory=None):
+                    plot_results=False, target_directory=None):
     """Compute NPW-observer detectability index for multiple disc sizes.
 
     Uses pre-computed 1D MTF and NPS curves and the AAPM TG-233
@@ -466,7 +466,7 @@ def get_d_prime_npwe(mtf_freq, mtf, nps_freq, nps,
                      eye_filter_fc_cy_per_deg=DEFAULT_EYE_FILTER_FC_CY_PER_DEG,
                      viewing_distance_mm=DEFAULT_VIEWING_DISTANCE_MM,
                      magnification=DEFAULT_MAGNIFICATION,
-                     plot_results=True, target_directory=None):
+                     plot_results=False, target_directory=None):
     """Compute NPWE-observer (non-prewhitening + eye filter) detectability index.
 
     Same NPW matched-filter structure as get_d_prime_npw, with the human
@@ -551,7 +551,7 @@ def get_d_prime_npwe(mtf_freq, mtf, nps_freq, nps,
 
 def get_d_prime(image_data_TTF, centre_pixels_TTF, radius_TTF, materials_TTF, image_data_NPS, ROI_bounds_NPS,
                 task_function_data, task_function_material, task_function_object_size, pixel_size=0.05,
-                verbose=True, plot_results=True, target_directory=os.getcwd()):
+                verbose=True, plot_results=False, target_directory=os.getcwd()):
     """
     This function calculates the Detectability index (d') on image data. It uses the TTF and NPS functions from
     the TTF_calculator and NPS_calculator scripts respectively.
@@ -661,116 +661,91 @@ def create_circular_task_function(contrast, radius, pixel_size=0.05, image_dimen
 
     return task_function_data
 
-def parse_args():
+def parse_args(argv=None):
     import argparse
-    from .helper_scripts.io_utils import parse_centre_pixels, parse_roi_bounds, parse_slices
+    from .helpers.io_utils import parse_centre_pixels, parse_roi_bounds
 
     parser = argparse.ArgumentParser(
-        description='Calculate the Detectability Index (d\') from CT image data.')
-    sub = parser.add_subparsers(dest='mode', help='Calculation mode')
+        prog='ct-dprime', description="Detectability index d'. 'npw' reads saved ct-mtf / ct-nps "
+                                      "results (the usual route); 'ttf' works in the image domain "
+                                      "from circular inserts.")
+    sub = parser.add_subparsers(dest='mode', required=True)
 
-    # --- TTF-based mode (original) ---
-    p_ttf = sub.add_parser('ttf', help='TTF-based d\' from circular phantom inserts')
+    p_npw = sub.add_parser('npw', help="NPW-observer d' from saved MTF and NPS curves (AAPM TG-233)")
+    p_npw.add_argument('--mtf', '--mtf_npz', dest='mtf', required=True,
+                       help='mtf.npz (or stem) written by ct-mtf')
+    p_npw.add_argument('--nps', '--nps_npz', dest='nps', required=True,
+                       help='nps.npz (or stem) written by ct-nps')
+    p_npw.add_argument('--disc_diameters', type=str, default=None,
+                       help='Comma-separated disc diameters in mm (default 0.15,0.5,1,3)')
+    p_npw.add_argument('--contrast', type=float, default=DEFAULT_CONTRAST_HU,
+                       help=f'Disc contrast in HU (default {DEFAULT_CONTRAST_HU:g})')
+    p_npw.add_argument('--rose_threshold', type=float, default=ROSE_THRESHOLD,
+                       help=f"d' threshold for the detectable size (default {ROSE_THRESHOLD:g})")
+    p_npw.add_argument('--output_dir', type=str, default='./results', help='Output directory')
+    p_npw.add_argument('--no_plot', action='store_true', help='Skip the figure')
+    p_npw.add_argument('--show', action='store_true', help='Display plots interactively')
+    p_npw.add_argument('--quiet', action='store_true')
+
+    p_ttf = sub.add_parser('ttf', help="image-domain d' from TTF inserts and NPS ROIs")
     p_ttf.add_argument('--input_ttf', required=True, help='Path to TTF image file (.npy, .npz, or .vff)')
     p_ttf.add_argument('--input_nps', required=True, help='Path to NPS image file (.npy, .npz, or .vff)')
     p_ttf.add_argument('--centre_pixels', required=True, type=parse_centre_pixels,
-                        help='Centre pixels as semicolon-separated y,x pairs (e.g. "686,398;418,132")')
+                       help='Insert centres as "y,x;y,x;..."')
     p_ttf.add_argument('--radius', required=True, type=int, help='Radius of circular edges in pixels')
     p_ttf.add_argument('--materials', required=True, type=str,
-                        help='Comma-separated material names (e.g. "SB3,Teflon,Fat,Tissue")')
+                       help='Comma-separated material names, one per centre')
     p_ttf.add_argument('--roi_bounds', required=True, type=parse_roi_bounds,
-                        help='NPS ROI bounds as semicolon-separated y1,y2,x1,x2 groups')
+                       help='NPS ROI bounds as "y1,y2,x1,x2;..."')
     p_ttf.add_argument('--task_material', required=True, type=str, help='Task function material (e.g. "Fat")')
-    p_ttf.add_argument('--task_contrast', type=float, default=-160, help='Task function contrast in HU (default: -160)')
-    p_ttf.add_argument('--task_object_size', type=float, default=0.2, help='Task function object radius in mm (default: 0.2)')
+    p_ttf.add_argument('--task_contrast', type=float, default=-160, help='Task function contrast in HU')
+    p_ttf.add_argument('--task_object_size', type=float, default=0.2, help='Task object radius in mm')
     p_ttf.add_argument('--slices_ttf', type=str, default=None, help='Slice selection for TTF data')
     p_ttf.add_argument('--slices_nps', type=str, default=None, help='Slice selection for NPS data')
-    p_ttf.add_argument('--pixel_size', type=float, default=0.05, help='Pixel size in mm (default: 0.05)')
-    p_ttf.add_argument('--output_dir', type=str, default='./results', help='Output directory (default: ./results)')
-    p_ttf.add_argument('--no_plot', action='store_true', help='Disable plot generation')
+    p_ttf.add_argument('--pixel_size', type=float, required=True, help='Pixel size in mm')
+    p_ttf.add_argument('--output_dir', type=str, default='./results', help='Output directory')
+    p_ttf.add_argument('--no_plot', action='store_true', help='Skip the figure')
     p_ttf.add_argument('--show', action='store_true', help='Display plots interactively')
     p_ttf.add_argument('--quiet', action='store_true', help='Suppress console output')
-
-    # --- NPW mode (frequency-domain, from pre-computed MTF/NPS) ---
-    p_npw = sub.add_parser('npw', help='NPW-observer d\' from pre-computed MTF/NPS curves (AAPM TG-233)')
-    p_npw.add_argument('--mtf_npz', required=True,
-                        help='Path to .npz with "mtf_freq" and "mtf" arrays')
-    p_npw.add_argument('--nps_npz', required=True,
-                        help='Path to .npz with "nps_freq" and "nps" arrays')
-    p_npw.add_argument('--disc_diameters', type=str, default=None,
-                        help='Comma-separated disc diameters in mm (default: 0.15,0.5,1.0,3.0)')
-    p_npw.add_argument('--contrast', type=float, default=DEFAULT_CONTRAST_HU,
-                        help=f'Contrast in HU (default: {DEFAULT_CONTRAST_HU})')
-    p_npw.add_argument('--rose_threshold', type=float, default=ROSE_THRESHOLD,
-                        help='Detectability threshold at which the detectable '
-                             f'disc size is read off (default: {ROSE_THRESHOLD:g}, '
-                             'the Rose criterion)')
-    p_npw.add_argument('--output_dir', type=str, default='./results', help='Output directory')
-    p_npw.add_argument('--no_plot', action='store_true', help='Disable plot generation')
-    p_npw.add_argument('--show', action='store_true', help='Display plots interactively')
-
-    # Default to TTF mode for backwards compatibility
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main():
-    args = parse_args()
-    from .helper_scripts.io_utils import load_image_data, ensure_output_dir, parse_slices
+def main(argv=None):
+    args = parse_args(argv)
+    from .helpers.io_utils import load_image_data, ensure_output_dir, parse_slices
 
+    output_dir = ensure_output_dir(args.output_dir)
     if args.mode == 'npw':
-        output_dir = ensure_output_dir(args.output_dir)
-        mtf_data = np.load(args.mtf_npz)
-        nps_data = np.load(args.nps_npz)
-
-        diameters = None
-        if args.disc_diameters:
-            diameters = [float(x) for x in args.disc_diameters.split(',')]
-
-        result = get_d_prime_npw(
-            mtf_data['mtf_freq'], mtf_data['mtf'],
-            nps_data['nps_freq'], nps_data['nps'],
-            disc_diameters_mm=diameters,
-            contrast_hu=args.contrast,
-            rose_threshold=args.rose_threshold,
-            plot_results=not args.no_plot,
-            target_directory=output_dir,
-        )
-        dp_header = "d'"
-        print(f"\nNPW Detectability Index (ΔC = {result['contrast_hu']:.0f} HU)")
-        print(f"{'Diameter (mm)':>14s}  {dp_header:>8s}  {'Detectable':>10s}")
-        print('-' * 36)
-        threshold = result['rose_threshold']
-        for d, dp in zip(result['disc_diameters_mm'], result['d_prime']):
-            flag = 'Yes' if dp >= threshold else 'No'
-            print(f'{d:>14.2f}  {dp:>8.1f}  {flag:>10s}')
-        print('-' * 36)
-        size = result['diameter_at_threshold_mm']
-        if np.isfinite(size):
-            print(f"Detectable disc size at the Rose threshold "
-                  f"(d'={threshold:g}): {size:.3f} mm")
-        else:
-            print(f"d' does not cross the Rose threshold (d'={threshold:g}) "
-                  f"anywhere on the sampled diameters")
-
+        from .api import detectability
+        from .results import MetricResult
+        diameters = [float(x) for x in args.disc_diameters.split(',')] if args.disc_diameters else None
+        result = detectability(MetricResult.load(args.mtf), MetricResult.load(args.nps),
+                               disc_diameters_mm=diameters, contrast_hu=args.contrast,
+                               rose_threshold=args.rose_threshold,
+                               plot_dir=None if args.no_plot else output_dir)
+        npz, js = result.save(os.path.join(output_dir, 'd_prime'))
+        if not args.quiet:
+            print(f"NPW detectability index (dC = {result.summary['contrast_hu']:.0f} HU)")
+            for d, dp in zip(result.x, result.y):
+                print(f"  {d:6.2f} mm  d' = {dp:7.2f}  {'detectable' if dp >= result.summary['rose_threshold'] else ''}")
+            size = result.summary['detectable_size_mm']
+            thr = result.summary['rose_threshold']
+            if np.isfinite(size):
+                print(f"  detectable disc size at d'={thr:g}: {size:.3f} mm")
+            else:
+                print(f"  d' does not reach {thr:g} on the sampled diameters")
+            print(f"written: {npz}, {js}")
     else:
-        # TTF mode (original behaviour / default)
         image_data_TTF = load_image_data(args.input_ttf)
         if args.slices_ttf is not None:
             image_data_TTF = image_data_TTF[parse_slices(args.slices_ttf)]
-
         image_data_NPS = load_image_data(args.input_nps)
         if args.slices_nps is not None:
             image_data_NPS = image_data_NPS[parse_slices(args.slices_nps)]
-
         materials = [m.strip() for m in args.materials.split(',')]
-        output_dir = ensure_output_dir(args.output_dir)
-
         task_function_data = create_circular_task_function(
-            args.task_contrast, args.task_object_size,
-            pixel_size=args.pixel_size,
-            image_dimension=np.min(image_data_TTF.shape[1:])
-        )
-
+            args.task_contrast, args.task_object_size, pixel_size=args.pixel_size,
+            image_dimension=np.min(image_data_TTF.shape[1:]))
         _ = get_d_prime(image_data_TTF, args.centre_pixels, args.radius, materials,
                         image_data_NPS, args.roi_bounds,
                         task_function_data=task_function_data,
@@ -778,7 +753,6 @@ def main():
                         task_function_object_size=args.task_object_size,
                         pixel_size=args.pixel_size, verbose=not args.quiet,
                         plot_results=not args.no_plot, target_directory=output_dir)
-
     if args.show:
         plt.show()
 

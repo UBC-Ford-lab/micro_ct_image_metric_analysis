@@ -5,12 +5,12 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 import scipy.integrate
-from photutils.profiles import RadialProfile
+from .helpers.radial import radial_profile as RadialProfile
 
 # https://en.wikipedia.org/wiki/Spectral_density is useful to understand the concept of NPS
 # https://www.sciencedirect.com/science/article/pii/S1120179715003294 is a good academic paper to cross-check understanding
 
-def get_NPS(image_data, ROI_bounds, pixel_size, target_directory=os.getcwd(), plot_results=True, filter_low_freq=False, roi_shape="square"):
+def get_NPS(image_data, ROI_bounds, pixel_size, target_directory=os.getcwd(), plot_results=False, filter_low_freq=False, roi_shape="square"):
     """
     This function calculates the Noise Power Spectrum (NPS) on image data.
     :param image_data: 3D numpy array containing the image data
@@ -181,40 +181,40 @@ def get_NPS(image_data, ROI_bounds, pixel_size, target_directory=os.getcwd(), pl
 
     return (radialprofile.radius*np.max(NPS_freqs_transverse)/np.max(radialprofile.radius)), np.mean(NPS_radial_avg, axis=0)
 
-def parse_args():
+def parse_args(argv=None):
     import argparse
-    from .helper_scripts.io_utils import parse_roi_bounds, parse_slices
-    parser = argparse.ArgumentParser(description='Calculate the Noise Power Spectrum (NPS) from CT image data.')
+    from .helpers.io_utils import parse_roi_bounds
+    parser = argparse.ArgumentParser(
+        prog='ct-nps', description='Noise power spectrum of a CT volume from square ROIs. Writes '
+                                   'nps.npz + nps.json (curve, noise sigma, peak/mean frequency).')
     parser.add_argument('--input', required=True, help='Path to image file (.npy, .npz, or .vff)')
     parser.add_argument('--roi_bounds', required=True, type=parse_roi_bounds,
-                        help='ROI bounds as semicolon-separated y1,y2,x1,x2 groups '
-                             '(e.g. "178,294,510,626;258,374,750,866")')
+                        help='ROI bounds as "y1,y2,x1,x2;y1,y2,x1,x2;..." (all square, same size)')
     parser.add_argument('--slices', type=str, default=None,
-                        help='Slice selection (e.g. "0:30,140:182")')
+                        help='Slice selection (e.g. "10:160" or "0:30,140:182")')
     parser.add_argument('--pixel_size', type=float, required=True, help='Pixel size in mm')
-    parser.add_argument('--filter_low_freq', action='store_true', help='Filter low frequency components')
-    parser.add_argument('--output_dir', type=str, default='./results', help='Output directory (default: ./results)')
-    parser.add_argument('--no_plot', action='store_true', help='Disable plot generation')
+    parser.add_argument('--output_dir', type=str, default='./results', help='Output directory')
+    parser.add_argument('--no_plot', action='store_true', help='Skip the diagnostic figure')
     parser.add_argument('--show', action='store_true', help='Display plots interactively')
-    return parser.parse_args()
+    parser.add_argument('--quiet', action='store_true')
+    return parser.parse_args(argv)
 
 
-def main():
-    args = parse_args()
-    from .helper_scripts.io_utils import load_image_data, ensure_output_dir, parse_slices
+def main(argv=None):
+    args = parse_args(argv)
+    from .api import nps as _api_nps
+    from .helpers.io_utils import load_image_data, ensure_output_dir, parse_slices
 
     image_data = load_image_data(args.input)
-    if args.slices is not None:
-        image_data = image_data[parse_slices(args.slices)]
-
+    slices = parse_slices(args.slices) if args.slices else None
     output_dir = ensure_output_dir(args.output_dir)
-
-    _ = get_NPS(image_data, args.roi_bounds, pixel_size=args.pixel_size,
-                target_directory=output_dir, plot_results=not args.no_plot,
-                filter_low_freq=args.filter_low_freq)
-
+    result = _api_nps(image_data, args.roi_bounds, args.pixel_size, slices=slices,
+                      plot_dir=None if args.no_plot else output_dir)
+    npz, js = result.save(os.path.join(output_dir, 'nps'))
+    if not args.quiet:
+        print(result.describe())
+        print(f"written: {npz}, {js}")
     if args.show:
-        import matplotlib.pyplot as plt
         plt.show()
 
 

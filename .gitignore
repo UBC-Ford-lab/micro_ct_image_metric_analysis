@@ -44,3 +44,6 @@ venv/
 
 # Claude
 .claude/
+
+# Tests are kept out of the public repo
+tests/

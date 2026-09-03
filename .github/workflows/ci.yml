@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package
+        run: pip install -e ".[dev]"
+
+      - name: Import and console scripts resolve
+        run: |
+          python -c "import microct_iq_toolbox as m; print(m.__version__)"
+          ct-mtf --help > /dev/null
+          ct-nps --help > /dev/null
+          ct-neq --help > /dev/null
+          ct-ttf --help > /dev/null
+          ct-dprime --help > /dev/null
+          ct-metrics --help > /dev/null
+          ct-find-rois --help > /dev/null
+          ct-report --help > /dev/null
+          ct-demo --help > /dev/null
+
+      - name: End-to-end demo (NumPy radial profile, no photutils)
+        run: |
+          pip uninstall -y photutils || true
+          ct-demo --out demo --quiet
+          test -f demo/results/iq_report.png
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/

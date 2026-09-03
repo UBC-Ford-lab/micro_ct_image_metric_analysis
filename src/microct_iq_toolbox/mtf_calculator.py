@@ -7,7 +7,7 @@ import os
 import matplotlib.pyplot as plt
 
 def get_MTF(image_data, crop_indices, find_absolute_MTF=True, pixel_size=0.05,
-            target_directory=os.getcwd(), plot_results=True, edge_angle=5.0, high_to_low=True, process_LSF=True, return_ERF=False, normalize_MTF=True, **kwargs):
+            target_directory=os.getcwd(), plot_results=False, edge_angle=5.0, high_to_low=True, process_LSF=True, return_ERF=False, normalize_MTF=True, **kwargs):
     """
     This function calculates the Modulation Transfer Function (MTF) on image data. Note that number of data points for the fit,
     needs to be a 4x supersampled version of image data according to ISO 12233
@@ -41,7 +41,7 @@ def get_MTF(image_data, crop_indices, find_absolute_MTF=True, pixel_size=0.05,
     """
     # Check if the LSF processing is required
     if process_LSF:
-        from .helper_scripts import lsf_processing as LSF_processing
+        from .helpers import lsf_processing as LSF_processing
 
     # Work on a COPY. This function reshapes and pads crop_indices, and it used
     # to do so in place on the caller's list — so all_metrics_calculator, which
@@ -321,44 +321,45 @@ def get_MTF(image_data, crop_indices, find_absolute_MTF=True, pixel_size=0.05,
     else:
         return MTF_freq, MTF
 
-def parse_args():
+def parse_args(argv=None):
     import argparse
-    from .helper_scripts.io_utils import parse_int_list, parse_slices
-    parser = argparse.ArgumentParser(description='Calculate the Modulation Transfer Function (MTF) from CT image data.')
+    from .helpers.io_utils import parse_int_list
+    parser = argparse.ArgumentParser(
+        prog='ct-mtf', description='Slanted-edge MTF of a CT volume. Writes mtf.npz + mtf.json '
+                                   '(curve and MTF50/MTF10) and, unless --no_plot, a figure.')
     parser.add_argument('--input', required=True, help='Path to image file (.npy, .npz, or .vff)')
     parser.add_argument('--crop_indices', required=True, type=parse_int_list,
-                        help='Crop region as y1,y2,x1,x2 (e.g. "270,664,522,640")')
+                        help='Crop region as y1,y2,x1,x2 (e.g. "270,664,522,640"); height = 2 x width')
     parser.add_argument('--slices', type=str, default=None,
                         help='Slice selection (e.g. "10:160" or "0:30,140:182")')
-    parser.add_argument('--pixel_size', type=float, default=0.05, help='Pixel size in mm (default: 0.05)')
-    parser.add_argument('--edge_angle', type=float, default=5.0, help='Edge angle in degrees (default: 5.0)')
-    parser.add_argument('--high_to_low', action='store_true', default=True,
-                        help='Edge goes from high to low intensity (default: True)')
-    parser.add_argument('--low_to_high', action='store_true', help='Edge goes from low to high intensity')
-    parser.add_argument('--relative', action='store_true', help='Calculate relative MTF instead of absolute')
-    parser.add_argument('--output_dir', type=str, default='./results', help='Output directory (default: ./results)')
-    parser.add_argument('--no_plot', action='store_true', help='Disable plot generation')
+    parser.add_argument('--pixel_size', type=float, required=True, help='Pixel size in mm')
+    parser.add_argument('--edge_angle', type=float, required=True,
+                        help='Edge angle in degrees (ct-find-rois measures it)')
+    parser.add_argument('--low_to_high', action='store_true',
+                        help='Edge goes from low to high intensity along +x (default: high to low)')
+    parser.add_argument('--output_dir', type=str, default='./results', help='Output directory')
+    parser.add_argument('--no_plot', action='store_true', help='Skip the diagnostic figure')
     parser.add_argument('--show', action='store_true', help='Display plots interactively')
-    return parser.parse_args()
+    parser.add_argument('--quiet', action='store_true')
+    return parser.parse_args(argv)
 
 
-def main():
-    args = parse_args()
-    from .helper_scripts.io_utils import load_image_data, ensure_output_dir, parse_slices
+def main(argv=None):
+    args = parse_args(argv)
+    from .api import mtf as _api_mtf
+    from .helpers.io_utils import load_image_data, ensure_output_dir, parse_slices
 
     image_data = load_image_data(args.input)
-    if args.slices is not None:
-        image_data = image_data[parse_slices(args.slices)]
-
+    slices = parse_slices(args.slices) if args.slices else None
     output_dir = ensure_output_dir(args.output_dir)
-    high_to_low = not args.low_to_high
-
-    _ = get_MTF(image_data, args.crop_indices, find_absolute_MTF=not args.relative,
-                pixel_size=args.pixel_size, target_directory=output_dir,
-                plot_results=not args.no_plot, edge_angle=args.edge_angle, high_to_low=high_to_low)
-
+    result = _api_mtf(image_data, args.crop_indices, args.pixel_size,
+                      edge_angle=args.edge_angle, high_to_low=not args.low_to_high,
+                      slices=slices, plot_dir=None if args.no_plot else output_dir)
+    npz, js = result.save(os.path.join(output_dir, 'mtf'))
+    if not args.quiet:
+        print(result.describe())
+        print(f"written: {npz}, {js}")
     if args.show:
-        import matplotlib.pyplot as plt
         plt.show()
 
 

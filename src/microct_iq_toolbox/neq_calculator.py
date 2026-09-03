@@ -50,7 +50,7 @@ def neq_from_curves(mtf_freq, mtf, nps_freq, nps, n_freq=100, signal=None):
 
 
 def get_NEQ(image_data_MTF, image_data_NPS, crop_indices_MTF, ROI_bounds_NPS, pixel_size, target_directory=os.getcwd(),
-            plot_results=True, high_to_low_MTF=True, edge_angle=5.5):
+            plot_results=False, high_to_low_MTF=True, edge_angle=5.5):
     """
     This function calculates the Noise-Equivalent Quanta (NEQ) on image data. It uses the MTF and NPS functions from
     the MTF_calculator and NPS_calculator scripts respectively.
@@ -138,50 +138,42 @@ def get_NEQ(image_data_MTF, image_data_NPS, crop_indices_MTF, ROI_bounds_NPS, pi
 
     return freqs, NEQ
 
-def parse_args():
+def parse_args(argv=None):
     import argparse
-    from .helper_scripts.io_utils import parse_int_list, parse_roi_bounds, parse_slices
-    parser = argparse.ArgumentParser(description='Calculate the Noise-Equivalent Quanta (NEQ) from CT image data.')
-    parser.add_argument('--input_mtf', required=True, help='Path to MTF image file (.npy, .npz, or .vff)')
-    parser.add_argument('--input_nps', required=True, help='Path to NPS image file (.npy, .npz, or .vff)')
-    parser.add_argument('--crop_indices', required=True, type=parse_int_list,
-                        help='MTF crop region as y1,y2,x1,x2 (e.g. "270,664,522,640")')
-    parser.add_argument('--roi_bounds', required=True, type=parse_roi_bounds,
-                        help='NPS ROI bounds as semicolon-separated y1,y2,x1,x2 groups')
-    parser.add_argument('--slices_mtf', type=str, default=None, help='Slice selection for MTF data')
-    parser.add_argument('--slices_nps', type=str, default=None, help='Slice selection for NPS data')
-    parser.add_argument('--pixel_size', type=float, required=True, help='Pixel size in mm')
-    parser.add_argument('--low_to_high', action='store_true', help='MTF edge goes from low to high intensity')
-    parser.add_argument('--edge_angle', type=float, default=5.5,
-                        help='Angle of the MTF edge in degrees (default: 5.5). '
-                             'Must match what you pass to ct-mtf.')
-    parser.add_argument('--output_dir', type=str, default='./results', help='Output directory (default: ./results)')
-    parser.add_argument('--no_plot', action='store_true', help='Disable plot generation')
+    parser = argparse.ArgumentParser(
+        prog='ct-neq', description='NEQ = MTF^2 / NPS from saved ct-mtf and ct-nps results. '
+                                   'Writes neq.npz + neq.json.')
+    parser.add_argument('--mtf', required=True, help='mtf.npz (or its stem) written by ct-mtf')
+    parser.add_argument('--nps', required=True, help='nps.npz (or its stem) written by ct-nps')
+    parser.add_argument('--output_dir', type=str, default='./results', help='Output directory')
+    parser.add_argument('--no_plot', action='store_true', help='Skip the figure')
     parser.add_argument('--show', action='store_true', help='Display plots interactively')
-    return parser.parse_args()
+    parser.add_argument('--quiet', action='store_true')
+    return parser.parse_args(argv)
 
 
-def main():
-    args = parse_args()
-    from .helper_scripts.io_utils import load_image_data, ensure_output_dir, parse_slices
-
-    image_data_MTF = load_image_data(args.input_mtf)
-    if args.slices_mtf is not None:
-        image_data_MTF = image_data_MTF[parse_slices(args.slices_mtf)]
-
-    image_data_NPS = load_image_data(args.input_nps)
-    if args.slices_nps is not None:
-        image_data_NPS = image_data_NPS[parse_slices(args.slices_nps)]
+def main(argv=None):
+    args = parse_args(argv)
+    from .api import neq as _api_neq
+    from .results import MetricResult
+    from .helpers.io_utils import ensure_output_dir
 
     output_dir = ensure_output_dir(args.output_dir)
-
-    _ = get_NEQ(image_data_MTF, image_data_NPS, args.crop_indices, args.roi_bounds,
-                pixel_size=args.pixel_size, target_directory=output_dir,
-                plot_results=not args.no_plot, high_to_low_MTF=not args.low_to_high,
-                edge_angle=args.edge_angle)
-
+    result = _api_neq(MetricResult.load(args.mtf), MetricResult.load(args.nps))
+    npz, js = result.save(os.path.join(output_dir, 'neq'))
+    if not args.no_plot:
+        fig, ax = plt.subplots(figsize=(7, 4))
+        ax.plot(result.x, result.y)
+        ax.set_xlabel('Spatial frequency (mm$^{-1}$)'); ax.set_ylabel('NEQ')
+        ax.set_title('Noise-equivalent quanta'); ax.grid(True)
+        fig.tight_layout()
+        fig.savefig(os.path.join(output_dir, 'NEQ_plot.png'), dpi=300)
+        if not args.show:
+            plt.close(fig)
+    if not args.quiet:
+        print(result.describe())
+        print(f"written: {npz}, {js}")
     if args.show:
-        import matplotlib.pyplot as plt
         plt.show()
 
 

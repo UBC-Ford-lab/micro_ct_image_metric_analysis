@@ -7,7 +7,7 @@ import os
 import matplotlib
 import matplotlib.pyplot as plt
 import scipy.signal
-from photutils.profiles import RadialProfile
+from .helpers.radial import radial_profile as RadialProfile
 
 #: A TTF measured on an edge the observer cannot see is a noise spectrum, not
 #: a transfer function. Inserts below this contrast-to-noise ratio are left out
@@ -18,7 +18,7 @@ DEFAULT_CNR_THRESHOLD = 5.0
 
 
 def get_TTF(image_data, centre_pixels, radius, materials=None, find_absolute_TTF=True, pixel_size=0.05,
-            target_directory=os.getcwd(), plot_results=True, process_LSF=True,
+            target_directory=os.getcwd(), plot_results=False, process_LSF=True,
             cnr_threshold=DEFAULT_CNR_THRESHOLD):
     """
     This function calculates the Task Transfer Function (TTF) on image data.
@@ -53,7 +53,7 @@ def get_TTF(image_data, centre_pixels, radius, materials=None, find_absolute_TTF
     :return: CNR_array: The Contrast-to-Noise Ratio for each material
     """
     if process_LSF:
-        from .helper_scripts import lsf_processing as LSF_processing
+        from .helpers import lsf_processing as LSF_processing
 
     # Define the sampling pixel increment. Determines how much it's supersampled
     sampling_pixel_increment = 1/4
@@ -284,45 +284,47 @@ def get_TTF(image_data, centre_pixels, radius, materials=None, find_absolute_TTF
 
     return TTF_freq, TTF_array, CNR_array
 
-def parse_args():
+def parse_args(argv=None):
     import argparse
-    from .helper_scripts.io_utils import parse_centre_pixels, parse_slices
-    parser = argparse.ArgumentParser(description='Calculate the Task Transfer Function (TTF) from CT image data.')
+    from .helpers.io_utils import parse_centre_pixels
+    parser = argparse.ArgumentParser(
+        prog='ct-ttf', description='Task transfer function of circular inserts. Writes ttf.npz + '
+                                   'ttf.json (one curve per insert, TTF50 and CNR each).')
     parser.add_argument('--input', required=True, help='Path to image file (.npy, .npz, or .vff)')
     parser.add_argument('--centre_pixels', required=True, type=parse_centre_pixels,
-                        help='Centre pixels as semicolon-separated y,x pairs (e.g. "1335,2141;765,1914")')
-    parser.add_argument('--radius', required=True, type=int, help='Radius of circular edges in pixels')
+                        help='Insert centres as "y,x;y,x;..."')
+    parser.add_argument('--radius', required=True, type=int, help='Analysis radius in pixels')
     parser.add_argument('--materials', type=str, default=None,
-                        help='Comma-separated material names (e.g. "Teflon,HD POLY,Fat,Tissue")')
-    parser.add_argument('--slices', type=str, default=None, help='Slice selection (e.g. "8:45")')
-    parser.add_argument('--pixel_size', type=float, default=0.05, help='Pixel size in mm (default: 0.05)')
-    parser.add_argument('--relative', action='store_true', help='Calculate relative TTF instead of absolute')
-    parser.add_argument('--output_dir', type=str, default='./results', help='Output directory (default: ./results)')
-    parser.add_argument('--no_plot', action='store_true', help='Disable plot generation')
+                        help='Comma-separated insert names, one per centre')
+    parser.add_argument('--slices', type=str, default=None,
+                        help='Slice selection (e.g. "30:130")')
+    parser.add_argument('--pixel_size', type=float, required=True, help='Pixel size in mm')
+    parser.add_argument('--cnr_threshold', type=float, default=DEFAULT_CNR_THRESHOLD,
+                        help=f'Inserts below this CNR are reported as unmeasured (default {DEFAULT_CNR_THRESHOLD})')
+    parser.add_argument('--output_dir', type=str, default='./results', help='Output directory')
+    parser.add_argument('--no_plot', action='store_true', help='Skip the diagnostic figure')
     parser.add_argument('--show', action='store_true', help='Display plots interactively')
-    return parser.parse_args()
+    parser.add_argument('--quiet', action='store_true')
+    return parser.parse_args(argv)
 
 
-def main():
-    args = parse_args()
-    from .helper_scripts.io_utils import load_image_data, ensure_output_dir, parse_slices
+def main(argv=None):
+    args = parse_args(argv)
+    from .api import ttf as _api_ttf
+    from .helpers.io_utils import load_image_data, ensure_output_dir, parse_slices
 
     image_data = load_image_data(args.input)
-    if args.slices is not None:
-        image_data = image_data[parse_slices(args.slices)]
-
-    materials = None
-    if args.materials is not None:
-        materials = [m.strip() for m in args.materials.split(',')]
-
+    slices = parse_slices(args.slices) if args.slices else None
+    materials = [m.strip() for m in args.materials.split(',')] if args.materials else None
     output_dir = ensure_output_dir(args.output_dir)
-
-    _ = get_TTF(image_data, args.centre_pixels, args.radius, materials=materials,
-                find_absolute_TTF=not args.relative, pixel_size=args.pixel_size,
-                target_directory=output_dir, plot_results=not args.no_plot)
-
+    result = _api_ttf(image_data, args.centre_pixels, args.radius, args.pixel_size,
+                      materials=materials, slices=slices, cnr_threshold=args.cnr_threshold,
+                      plot_dir=None if args.no_plot else output_dir)
+    npz, js = result.save(os.path.join(output_dir, 'ttf'))
+    if not args.quiet:
+        print(result.describe())
+        print(f"written: {npz}, {js}")
     if args.show:
-        import matplotlib.pyplot as plt
         plt.show()
 
 
